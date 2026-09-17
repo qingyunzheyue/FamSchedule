@@ -29,7 +29,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -68,21 +67,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isLoading, setIsLoading] = useState(true);
 
   /**
-   * "用户主动登出" ref — React-state 版本的 intent 标记。
-   *
-   * 为什么用 ref 而不是 useState:这是**命令式**的事件标记,不是状态;
-   * 不应触发 re-render,只在 signOut 调用瞬间用一次。
-   *
-   * 流程(与 AuthService.markIntentionalSignOut 配合):
-   *   1. signOut() 第一行:ref.current = true
-   *   2. clearSession() → SDK 发 SIGNED_OUT → AuthService listener 看到 ref 标志
-   *      → 不自动重连,emit signed_out
-   *   3. useEffect 监听到 user 变 null → 检查 ref.current:为 true 时跳过重连 + reset
-   *      (AuthService 也已 reset 它,这里是 belt-and-suspenders)
-   *
-   * 双层防御:AuthService 有 module-level flag,AuthContext 有 ref,任一层失效另一层兜底。
+   * 主动登出意图标记:
+   *   - AuthService 内部有 module-level `intentionalSignOutFlag`(一次性),
+   *     通过 `AuthService.markIntentionalSignOut()` 标记 — 见 AuthService §5。
+   *   - AuthContext 此前还并行保留了一个 `intentionalSignOutRef` 做"双层防御",
+   *     但 T-US013-1 重构后 AuthService 已直接接住 SDK 的 SIGNED_OUT 事件并消费 flag,
+   *     AuthContext 这层 ref 实际未被任何 effect 读取 → 2026-09-17 review 标记为死代码并删除。
+   *   - 现在:signOut() 直接调 AuthService.markIntentionalSignOut() + clearSession()。
    */
-  const intentionalSignOutRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -142,7 +134,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setSession(null);
         setUser(null);
       }
-      // 'loading' 状态本模块不主动 emit;但若未来加,这里可加分支
+      // AuthState 当前不含 'loading' 分支(SDK 启动前由 isLoading=true 表达),无需 switch 第三支
     });
 
     return () => {
@@ -171,12 +163,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   /**
    * 主动登出:
    *   1. 标记 intentionalSignOut(AuthService 会据此跳过自动重连)
-   *   2. 清 SecureStore + SDK session
+   *   2. 清 SDK session(SDK 内部清 SecureStore)
    *   3. 清 React state
    */
   const signOut = useCallback(async (): Promise<void> => {
-    intentionalSignOutRef.current = true;
-    markIntentionalSignOut(); // 通知 AuthService
+    markIntentionalSignOut(); // 通知 AuthService 跳过自动重连
     setIsLoading(true);
     try {
       await authServiceClearSession();

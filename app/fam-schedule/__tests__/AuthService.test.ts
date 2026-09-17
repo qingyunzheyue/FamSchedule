@@ -7,15 +7,17 @@
  *   3. restoreSession:有未过期 session → signed_in
  *   4. restoreSession:无 session → signed_out
  *   5. restoreSession:过期 session → refresh 失败 → signed_out
- *   6. clearSession:signOut + SecureStore.deleteItemAsync 都触发
+ *   6. clearSession:signOut 触发(SDK 端到端负责 SecureStore,本模块不直读直写)
  *   7. subscribeAuthState:SIGNED_OUT 自动触发 signInAnonymously(DoD #4)
  *   8. subscribeAuthState:markIntentionalSignOut 后 SIGNED_OUT 不自动重连
  *   9. subscribeAuthState:TOKEN_REFRESHED 映射成 signed_in
- *  10. _resetForTests:清 listener + intentionalSignOutFlag
+ *  10. subscribeAuthState:INITIAL_SESSION + null session 降级到 signed_out(冷启动)
+ *  11. subscribeAuthState:SIGNED_IN + null session 降级到 signed_out(异常路径)
+ *  12. _resetForTests:清 listener + intentionalSignOutFlag
  *
  * Mock 策略:
  *   - supabase 整个模块 mock 掉,提供可编程的 mockAuth
- *   - expo-secure-store mock deleteItemAsync(SDK 内置 SecureStore 走 SDK 自己,本测试不需要)
+ *   - 不需要 expo-secure-store mock(AuthService 不再直接调 SecureStore,SDK 端到端处理)
  *   - 不需要 react-native mock(AuthService 不依赖 RN API)
  */
 
@@ -36,7 +38,6 @@ let mockSignOut: jest.Mock;
 let mockGetSession: jest.Mock;
 let mockRefreshSession: jest.Mock;
 let mockOnAuthStateChange: jest.Mock;
-let mockDeleteItemAsync: jest.Mock;
 
 jest.mock('../src/lib/supabase', () => {
   mockSignInAnonymously = jest.fn();
@@ -54,13 +55,6 @@ jest.mock('../src/lib/supabase', () => {
         onAuthStateChange: (...args: unknown[]) => mockOnAuthStateChange(...args),
       },
     },
-  };
-});
-
-jest.mock('expo-secure-store', () => {
-  mockDeleteItemAsync = jest.fn(async () => undefined);
-  return {
-    deleteItemAsync: (...args: unknown[]) => mockDeleteItemAsync(...args),
   };
 });
 
@@ -106,8 +100,6 @@ beforeEach(() => {
   });
   // 默认:signOut 成功
   mockSignOut.mockResolvedValue({ error: null });
-  // 默认:deleteItemAsync 成功
-  mockDeleteItemAsync.mockResolvedValue(undefined);
 });
 
 // =====================================================================
@@ -221,19 +213,16 @@ describe('AuthService.restoreSession', () => {
 });
 
 describe('AuthService.clearSession', () => {
-  it('calls signOut + SecureStore.deleteItemAsync', async () => {
+  it('calls signOut (SDK handles SecureStore end-to-end)', async () => {
     await clearSession();
 
     expect(mockSignOut).toHaveBeenCalledTimes(1);
-    expect(mockDeleteItemAsync).toHaveBeenCalledTimes(1);
-    expect(mockDeleteItemAsync).toHaveBeenCalledWith('auth:session');
   });
 
-  it('still attempts SecureStore.deleteItemAsync even if signOut throws', async () => {
+  it('resolves without throwing even if signOut throws', async () => {
     mockSignOut.mockRejectedValue(new Error('signOut exploded'));
 
     await expect(clearSession()).resolves.toBeUndefined();
-    expect(mockDeleteItemAsync).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -316,6 +305,47 @@ describe('AuthService.subscribeAuthState', () => {
       session: refreshedSession,
       user: fakeUser,
     });
+  });
+
+  it('INITIAL_SESSION with null session degrades to signed_out (cold-start no auth)', async () => {
+    // 冷启动但 SecureStore 无任何 session:SDK 仍发 INITIAL_SESSION,这里 session=null。
+    // 期望:不 emit signed_in,降级到 signed_out(等上层决定要不要 signInAnonymously)。
+    const onChange = jest.fn();
+    let mockListener: (event: string, session: Session | null) => void = () => {};
+    mockOnAuthStateChange.mockImplementation((cb: (event: string, session: Session | null) => void) => {
+      mockListener = cb;
+      return { data: { subscription: { unsubscribe: jest.fn() } } };
+    });
+
+    subscribeAuthState(onChange);
+
+    await mockListener('INITIAL_SESSION', null);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ status: 'signed_out' });
+    // 冷启动 null session 不应自动 signIn(由上层 AuthContext.initialize() 决定要不要 anon sign-in)
+    expect(mockSignInAnonymously).not.toHaveBeenCalled();
+  });
+
+  it('SIGNED_IN with null session degrades to signed_out (degraded path)', async () => {
+    // 罕见路径:SDK 发 SIGNED_IN 但 session=null(理论上不该发生,做兜底)。
+    // 期望:不 emit signed_in,降级到 signed_out;不自动重连(避免循环触发)。
+    const onChange = jest.fn();
+    let mockListener: (event: string, session: Session | null) => void = () => {};
+    mockOnAuthStateChange.mockImplementation((cb: (event: string, session: Session | null) => void) => {
+      mockListener = cb;
+      return { data: { subscription: { unsubscribe: jest.fn() } } };
+    });
+
+    subscribeAuthState(onChange);
+
+    await mockListener('SIGNED_IN', null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ status: 'signed_out' });
+    expect(mockSignInAnonymously).not.toHaveBeenCalled();
   });
 
   it('returns unsubscribe function that detaches listener', () => {

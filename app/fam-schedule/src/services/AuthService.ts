@@ -4,7 +4,7 @@
  * 职责(auth 生命周期,纯数据层):
  *   1. signInAnonymously()    — 调 supabase.auth.signInAnonymously()
  *   2. restoreSession()       — 调 supabase.auth.getSession()(SDK 内部从 SecureStore 读)
- *   3. clearSession()         — 调 supabase.auth.signOut() + 防御性清 SecureStore key
+ *   3. clearSession()         — 调 supabase.auth.signOut()(SDK 内部清 SecureStore)
  *   4. subscribeAuthState(cb) — 包装 supabase.auth.onAuthStateChange,
  *                                把事件映射成 AuthState 推给订阅者
  *   5. 自动重连策略           — SIGNED_OUT 触发时若非"用户主动登出",
@@ -14,12 +14,11 @@
  * 设计依据:
  *   - ADR-002(Anon Sign-in + SecureStore):Supabase SDK 已通过 ExpoSecureStoreAdapter
  *     把 session 持久化到 SecureStore,所以本模块**不直接读写 SecureStore**;
- *     唯一的 SecureStore 直接调用是 clearSession 的"防御性 deleteItemAsync",
- *     兜底 SDK 可能漏 clear 的边界 case
+ *     session 的读写和清除全部由 SDK 自己端到端负责
  *   - 单一职责:AuthService 是 session 生命周期 + 自动重连策略的单一权威;
  *     AuthContext(本任务重构后)是 React-facing hook,把 AuthService 事件翻译成 React state。
- *     AuthContext 仍保留 `intentionalSignOutRef` 守卫调用 markIntentionalSignOut,
- *     避免 AuthContext 内部的 useEffect 与 AuthService 的 auto-reconnect 双触发
+ *     AuthContext 通过 `AuthService.markIntentionalSignOut()` 标记主动登出,
+ *     避免 AuthContext 内部的 effect 与 AuthService 的 auto-reconnect 双触发
  *
  * 模块形态:
  *   - 模块级函数(不是 class)— 匹配 SyncManager / LocalStore 的风格
@@ -28,8 +27,7 @@
  *   - _resetForTests():与 SyncManager 对齐,给 jest 用
  *
  * AuthState 是 discriminated union:
- *   - loading      : SDK 还没准备好,UI 应渲染 splash
- *   - signed_out   : 无 session
+ *   - signed_out   : 无 session(冷启动 / 未登录 / 登出后)— UI 此时等渲染
  *   - signed_in    : 有 session + user
  *
  * ⚠️ 不在此模块处理 token 业务语义(token 是否过期由 supabase-js SDK + RLS 兜底),
@@ -37,7 +35,6 @@
  */
 
 import type { Session, User } from '@supabase/supabase-js';
-import * as SecureStore from 'expo-secure-store';
 
 import { supabase } from '../lib/supabase';
 
@@ -57,21 +54,8 @@ import { supabase } from '../lib/supabase';
  *   }
  */
 export type AuthState =
-  | { status: 'loading' }
   | { status: 'signed_out' }
   | { status: 'signed_in'; session: Session; user: User };
-
-/**
- * SecureStore key — 单一权威源。
- *
- * 命名:`auth:session`。Supabase SDK 实际存 session 用的是
- * `sb-<project-ref>-auth-token`(SDK 内部命名),这里用 `auth:session` 作为本
- * 模块自定义信息的 key 命名空间(目前 MVP 还没用到,留着为未来扩展)。
- *
- * 防御性 clearSession 时调 deleteItemAsync('auth:session') 是 no-op(SDK 没
- * 用这个 key),但保留了"我们以后用这个 key 存东西时一并清"的语义一致性。
- */
-const SECURE_STORE_KEY = 'auth:session';
 
 // =====================================================================
 // Module state (singleton refs)
@@ -215,9 +199,8 @@ export async function restoreSession(): Promise<AuthState> {
  * 主动登出。
  *
  * 流程:
- *   1. supabase.auth.signOut() — SDK 应该会清 SecureStore 内的 session
- *   2. 防御性 SecureStore.deleteItemAsync(SECURE_STORE_KEY)
- *      — 兜底 SDK 可能漏 clear 的边界 case(SDK 在某些错误路径可能不删)
+ *   1. supabase.auth.signOut() — SDK 内部会清 SecureStore 内的 session 持久化
+ *      (ExpoSecureStoreAdapter 端到端负责),本模块不再做额外的 SecureStore 操作
  *
  * ⚠️ 调用方语义:
  *    必须在调本函数前先调 markIntentionalSignOut(),否则 SDK 发的 SIGNED_OUT
@@ -231,14 +214,6 @@ export async function clearSession(): Promise<void> {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[AuthService] clearSession signOut threw:', e);
-    // 继续往下走 — signOut 失败也尝试防御性清
-  }
-
-  try {
-    // 防御性:清掉自己 key 下的内容(若之前用过)。失败静默吞。
-    await SecureStore.deleteItemAsync(SECURE_STORE_KEY);
-  } catch {
-    // SecureStore.deleteItemAsync 在 key 不存在时也可能抛;静默吞。
   }
 }
 
