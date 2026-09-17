@@ -16,7 +16,7 @@
 | 来源 PRD | v1.3 |
 | 关联设计 | arch-v1.0.md / **db-v1.1.sql**(原 v1.0 已弃用)/ api-v1.0.yaml |
 | 关联 ADRs | adr-001 ~ adr-007 |
-| 最近更新 | 2026-09-17 — **T-FIX-03 ✅ 收尾,Wave 1 P0 修复 3/3 全清(T-FIX-01/02/03)**;§3.5 Review 修复任务新增 6 项(T-FIX-01..06)+ §9 Recommended Execution Order;源自 code-reviewer 对 SETUP 阶段的 NEEDS FIXES 评审(0 Critical / 3 Major / 11 Minor / 6 Cross-stack);3 个 P0 修复(T-FIX-01 同步数据丢失 / T-FIX-02 EAS projectId 一致性 / T-FIX-03 通知权限弹窗时机)**全部完成**,T-FIX-04..06 P1 留在 Sprint 2 Wave 2 主线收尾 |
+| 最近更新 | 2026-09-17 — **T-US013-1 ✅ done**(AuthService + SecureStore 持久化层抽离,AuthContext 从 236 行减到 196 行,15 个新单测全 pass);Wave 1 P0 修复 3/3 全清(T-FIX-01/02/03);US-013 进度 0/2 → 1/2;T-US013-2 splash guard + T-US012-1 FamilyService.create 解锁;§3.5 Review 修复任务新增 6 项(T-FIX-01..06)+ §9 Recommended Execution Order;源自 code-reviewer 对 SETUP 阶段的 NEEDS FIXES 评审(0 Critical / 3 Major / 11 Minor / 6 Cross-stack);3 个 P0 修复(T-FIX-01 同步数据丢失 / T-FIX-02 EAS projectId 一致性 / T-FIX-03 通知权限弹窗时机)**全部完成**,T-FIX-04..06 P1 留在 Sprint 2 Wave 2 主线收尾 |
 
 ---
 
@@ -37,6 +37,7 @@
 | v1.0+fix01 | 2026-09-17 | frontend-dev | **T-FIX-01 done** — 修复 `SyncManager.pullSince` 数据丢失守卫(原行 527 无条件 `setLastSyncAt`)。`app/fam-schedule/src/lib/SyncManager.ts` §8 重构:`pullSince` 改签名 `Promise<void>` → `Promise<PullStatus>`(`{ ok, tasks, templates, settings }` 4 字段);引入 `tasksOk / templatesOk / settingsOk` 三个子标志,任一 query 返回 error → 该标志 false;函数末尾 `if (ok) await setLastSyncAt(Date.now()) else console.warn('[SyncManager] pullSince partial failure — last_sync_at NOT advanced ...')`;失败时保留旧时间戳,下次 pullSince 自动重试缺失表;`!currentFamilyId` 早返回路径同步改为 `{ ok: false, tasks: false, templates: false, settings: false }`。注释块强化:明确写出"T-FIX-01 数据丢失守卫" + 触发条件 + 后果。原两处 caller(`subscribeFamily` 行 171 内部拉取 + `onReconnect` 行 592 网络恢复拉取)均 `await pullSince(...)` 丢弃返回值,签名 `void → PullStatus` 兼容,**零改动**。新增导出 `PullStatus` interface 供未来上层做"上次同步未完成" UI。`__tests__/SyncManager.test.ts` 新增 describe `SyncManager.pullSince partial-failure guard (T-FIX-01)` 2 用例:全成功 → status 全 true + `last_sync_at` 推进(`baseline = 1700000000000` 强基线避免 before===after 假阳性);tasks 5xx + templates/settings OK → status.tasks=false + ok=false + `last_sync_at` 严格不变(`expect(after).toBe(before)`)。`tsc --noEmit` 0 新增 error;`jest --silent` 32/32 pass(原 30 + 2 新,零回归)。**bug 当时是否真实影响**:code-reviewer 评审日(2026-09-17)才标记,本 fix 上线前未真正发生数据丢失(无用户反馈 + 无生产 session);fix 上线后 5xx 场景下 spouse 的增量 tasks 行不再被永久跳过。变动文件:仅 `SyncManager.ts` / `SyncManager.test.ts` / 本文件;无 ADR / schema / API 契约变更;FIX rollup 0/6 → 1/6(T-FIX-02/03 P0 + T-FIX-04..06 P1 仍在 Sprint 2 第一波) |
 | v1.0+fix02 | 2026-09-17 | frontend-dev | **T-FIX-02 done** — 收敛 EAS `projectId` 三处漂移 + env var 单一来源。**已选策略(B)**:`eas.json` 的 `build.preview.env` 块为 build-time 单一来源,与本地 dev 的 `app/fam-schedule/.env` 镜像(anon key 本就 publishable,Supabase 文档允许 inline,不切选项 A 的 `eas env:create`)。`app/fam-schedule/app.json` 清成 `{ "expo": {} }`(删 stale `extra.eas.projectId = e6c408cf-...` 与冗余 `extra.router.origin`),`app.config.ts` 顶部加 ~30 行 JSDoc 锁定 single-source-of-truth 政策(明确禁止未来向 `app.json` 写 `extra.*`/`ios.*`/`android.*`,改 env 值必须同时改 `eas.json` + `.env`)。`eas.json` env 块未改值 — 与 `.env` 已逐项对齐(URL `*.supabase.co` / anon key `sb_publishable_*`)。**验证**:`npx tsc --noEmit` exit 0;`npx expo config --type public` merged config 中 `c708a76a-...` × 1、`e6c408cf-...` × 0(stale 已从 merged 消失);`npx eas config --profile preview` 跳过(需 `eas login` 网络往返,按 DoD "trust the merged npx expo config");**未**真提交 EAS build(按 task 约束,避免 10-20 min 队列)。`extra.eas.projectId` 值保持 `c708a76a-dfe4-407d-bde5-b11c66efc882`(T-SETUP-8 GraphQL 旁路写入的工作值),T-SETUP-8 build `0246b4cd-...` 链路不变。变动文件:`app.json` / `app.config.ts`(仅顶部注释)/ 本文件;`eas.json` / `.env` / `.gitignore` **未改**;FIX rollup 1/6 → 2/6(T-FIX-03 P0 优先,后续 T-FIX-04..06 P1)。**范围外发现(留 hygiene batch)**:`.gitignore` 仅忽略 `.env*.local` 不忽略 `.env`,与 `.env` 第 4 行"本文件已被 .gitignore 排除"注释矛盾;当前内容仅为 publishable anon key,不构成 secret 风险,但建议 T-FIX-06 内追加 `.env`(去掉 `.local` 后缀) |
 | v1.0+fix03 | 2026-09-17 | frontend-dev | **T-FIX-03 done** — NotificationScheduler `init()` 拆分两阶段,移除 splash 抢弹权限框。**已选 Option B(变体)**:`NotificationScheduler.ts` 拆出 `requestNotificationPermission()` 与 `init()` 并存 — `init()`(eager)装 handler / 配 Android channel / 注册 tap listener / 处理 cold-start,**不**触发 `requestPermissionsAsync`;`requestNotificationPermission()`(gated)**仅**做权限申请,模块级 `permissionRequested` flag 守护幂等;`_resetForTests` 同步重置两 flag。`_layout.tsx` Gate 拆两个 useEffect:第一个 mount 即 `initNotificationScheduler().catch(warn)`,第二个 `[session, familyId]` deps 双条件触发 `requestNotificationPermission().catch(warn)` —— 用户登录 + 加入/创建家庭 = `familyId` 落定 = `router.replace('/(main)/(home)')` 推送 home tab 的同一 tick 弹框,语义最自然。`useNotificationSchedulerInit()` hook 保留(标注为 "eager init wrapper"),业务上不再调用。**测试重构**:`NotificationScheduler.test.ts` 原 4 个 `init()` 测试拆为 `init (T-FIX-03 eager stage)` 4 用例(handler/channels/listener+cold-start/idempotent-re-register-not-permission)+ `requestNotificationPermission (T-FIX-03 gated stage)` 4 用例(granted/denied/idempotent/no-init-precondition)。原"handles cold-start"用例保留在 tap routing block 不动。**验证**:`tsc --noEmit` 0 error;`jest --silent` 36/36 pass(原 32 + 4 新,零回归);FIX rollup 2/6 → 3/6(**Wave 1 P0 修复 3/3 收尾**,T-FIX-04..06 P1 仍待 Sprint 2 主线收尾)。**手动验证清单**(EAS build 跑出后):Android 清数据冷启动 → splash → onboarding(pair-create/join)→ 用户提交 RPC → familyId 落定 → home tab push 完成 tick 弹权限框(iOS 同);**splash 阶段完全不弹**。变动文件:`src/lib/NotificationScheduler.ts` / `app/_layout.tsx` / `__tests__/NotificationScheduler.test.ts` / 本文件;**严格 scope** 内,未触碰其他修复(T-FIX-04/05/06 不动) |
+| v1.0+us013-1 | 2026-09-17 | frontend-dev | **T-US013-1 done** — AuthService + SecureStore 持久化层抽离,业务逻辑从 AuthContext 下沉到独立 service 模块。**核心决策**:DoD #4(TOKEN_REFRESH 失败 / SIGNED_OUT 自动重连 anon)的策略层放在 AuthService,而**非** AuthContext — 业务层 AuthService 才懂"session 生命周期";AuthContext 只负责把 AuthState 翻译成 React state。AuthService 提供 `markIntentionalSignOut()` 一次性 flag 防止用户主动 signOut 被自动重连接住(原 AuthContext 的 `intentionalSignOutRef` 保留为 UX 守卫,双层防御:AuthService 也有 module-level flag,任一层失效另一层兜底)。**模块形态**:模块级函数(非 class),匹配 SyncManager / LocalStore 风格。**新文件**:`src/services/AuthService.ts`(15.6KB / 361 行),DoD 全 4 项实现:`signInAnonymously()` 调 `supabase.auth.signInAnonymously()` 包 try/catch → 不抛,返回 `{status:'signed_out'}` 让上层决定重试;`restoreSession()` 调 `supabase.auth.getSession()` + 过期检查 + `refreshSession` 兜底(SDK 内部已自动从 SecureStore 读,本函数是 defensive rehydrate);`clearSession()` 调 `supabase.auth.signOut()` + 防御性 `SecureStore.deleteItemAsync('auth:session')`(no-op 兜底,SDK 真用 key 是 `sb-<project-ref>-auth-token`);`subscribeAuthState(onChange)` 包装 `supabase.auth.onAuthStateChange`,事件映射 INITIAL_SESSION/SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED → signed_in,SIGNED_OUT → signed_out(若非主动则自动 signInAnonymously 重连)+ markIntentionalSignOut 后跳过重连;幂等(重复订阅先 unsub 旧的);`_resetForTests()` 重置 listener + flag 与 SyncManager 对齐;`AuthState` 是 discriminated union(`loading | signed_out | signed_in {session, user}`)让 TS exhaustiveness 检查生效。**AuthContext 重构**:236 → 196 行(-17%,-40 行);不再直接调 `supabase.auth.*`,全部走 AuthService;`signOut()` 前调 `AuthService.markIntentionalSignOut()` + ref 双标记;原 auto-reconnect useEffect 删除(职责下沉到 AuthService);公共 API `{user, session, isLoading, signInAnonymously, signOut}` 不变,18 个 page 零改动。**测试**:`__tests__/AuthService.test.ts` 新增 15 用例(`signInAnonymously` 3:success/error/throw + `restoreSession` 4:valid/none/expired-refresh-fail/expired-refresh-ok + `clearSession` 2:signOut+delete/throwing-signOut-still-deletes + `subscribeAuthState` 5:SIGNED_OUT-auto-reconnect/intentional-suppress/TOKEN_REFRESHED/unsubscribe-detaches/幂等 + `_resetForTests` 1),全部 pass。Mock 模式:supabase 整个模块 mock 暴露 `auth.{signInAnonymously,signOut,getSession,refreshSession,onAuthStateChange}` + `expo-secure-store.deleteItemAsync`;`onAuthStateChange` 用 `mockImplementation` 捕获 callback 供测试手动 emit 事件。**踩坑**:jest.fn() + mockImplementation 把回调参数类型推导成 `never`,导致 capturedCallback 后续调用编译失败 → 改用显式类型变量 `let mockListener: (event, session) => void`,规避类型 narrow。**验证**:`tsc --noEmit` 0 新增 error(仍 14 carry-over 全部在 Tamagui 1.x API 文件,out of scope);`jest --silent` 51/51 pass(原 36 + 15 新,零回归);US-013 进度 0/2 → 1/2;SETUP rollup 不变(T-US013-1 不属于 SETUP);**下游解锁** T-US013-2(SplashScreen)+ T-US012-1(FamilyService.create)。变动文件:`src/services/AuthService.ts`(新)/ `src/contexts/AuthContext.tsx`(重构)/ `__tests__/AuthService.test.ts`(新)/ 本文件;无 ADR / schema / API 契约变更
 
 ---
 
@@ -46,9 +47,9 @@
 
 | 状态 | 数量 |
 |---|---|
-| ✅ Done(已完成) | 11(T-SETUP-1 + T-SETUP-1.1 + T-SETUP-2 + T-SETUP-4 + T-SETUP-5 + T-SETUP-6 + T-SETUP-7 + T-SETUP-9 + **T-FIX-01** + **T-FIX-02** + **T-FIX-03**)— **Sprint 1 SETUP 全清 + Wave 1 P0 修复 3/3 收尾** |
+| ✅ Done(已完成) | 12(T-SETUP-1 + T-SETUP-1.1 + T-SETUP-2 + T-SETUP-4 + T-SETUP-5 + T-SETUP-6 + T-SETUP-7 + T-SETUP-9 + **T-FIX-01** + **T-FIX-02** + **T-FIX-03** + **T-US013-1**)— **Sprint 1 SETUP 全清 + Wave 1 P0 修复 3/3 收尾 + US-013 启动** |
 | 🟡 In Progress(进行中) | 1(T-SETUP-8 — EAS Build 排队中) |
-| ⚪ Not Started(未开始) | 55(52 US/QA/Deploy + **3 T-FIX Review 修复**:T-FIX-04..06 P1)|
+| ⚪ Not Started(未开始) | 54(51 US/QA/Deploy + **3 T-FIX Review 修复**:T-FIX-04..06 P1)|
 | 🔴 Blocked(阻塞中) | 0 |
 | **合计** | **67** |
 
@@ -58,7 +59,7 @@
 |---|---|---|---|
 | SETUP(项目骨架) | 10 | 9/10(T-SETUP-9 ✅ — Sprint 1 SETUP 收尾;仅 T-SETUP-8 🟡 build ID `0246b4cd...` 在 cloud 队列等下完)| 🟡 |
 | **FIX(Review 修复)** | **6** | **3/6(T-FIX-01/02/03 ✅ + T-FIX-04..06 P1)** | **🟡 — Sprint 2 第一波必清(3 P0 全收尾)** |
-| US-013 匿名设备身份 | 2 | 0/2 | ⚪ |
+| US-013 匿名设备身份 | 2 | 1/2(**T-US013-1 ✅** AuthService + SecureStore 持久化层;仅 T-US013-2 splash guard 待做) | 🟡 |
 | US-012 创建/加入家庭 | 3 | 0/3 | ⚪ |
 | US-001 创建任务 | 2 | 0/2 | ⚪ |
 | US-002 查看任务列表 | 3 | 0/3 | ⚪ |
@@ -633,7 +634,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Med
 - **Priority**: P0
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done(2026-09-17)— AuthService + SecureStore 持久化层抽离完成,详见 ChangeLog `v1.0+us013-1`
 - **Definition of Done**:
   - `signInAnonymously()` 调 supabase,拿 JWT,存 SecureStore(key = `auth:session`)
   - `restoreSession()` 从 SecureStore 读,设置到 supabase client
@@ -1528,9 +1529,9 @@ T-US007-1 (本地通知排程)
 | 1 | **T-FIX-01** | SyncManager.pullSince 部分失败 timestamp | S | T-SETUP-6 | 数据丢失风险最严重;tasks 查询 5xx → spouse 行永久跳过 |
 | 2 | **T-FIX-02** | EAS projectId 单一来源 + env 收敛 | S | T-SETUP-2, T-SETUP-8 | 配置卫生,不修则下次 OTA 推错 project |
 | 3 | **T-FIX-03** | 通知 init 时机延迟到 familyId 之后 | S | T-SETUP-7, T-SETUP-9 | 首启 UX,iOS 审核敏感 |
-| 4 | T-US013-1 | AuthService + SecureStore 持久化 | M | T-SETUP-4, **T-FIX-03**(familyId 已知) | Sprint 1 最小链路起点 |
-| 5 | T-US013-2 | 启动 boot guard | S | T-US013-1 | 替换 app/index.tsx 末尾的 Auth debug 区 |
-| 6 | T-US012-1 | FamilyService + 创建家庭 UI(真 RPC)| M | T-US013-1, T-SETUP-9 | 填 pair-create.tsx 真实 RPC wiring |
+| 4 | ~~T-US013-1~~ ✅ | AuthService + SecureStore 持久化 | M | T-SETUP-4, **T-FIX-03**(familyId 已知) | Sprint 1 最小链路起点 — **已完成(2026-09-17)** |
+| 5 | T-US013-2 | 启动 boot guard | S | T-US013-1 ✅ | 替换 app/index.tsx 末尾的 Auth debug 区 |
+| 6 | T-US012-1 | FamilyService + 创建家庭 UI(真 RPC)| M | T-US013-1 ✅, T-SETUP-9 | 填 pair-create.tsx 真实 RPC wiring |
 | 7 | T-US012-2 | 生成邀请码 UI | M | T-US012-1 | 填 invite-display.tsx |
 | 8 | T-US012-3 | 输入邀请码 + 配偶加入 UI | M | T-US012-1 | 填 invite-input.tsx;**完成时 Sprint 1 E2E 闭环(两台设备能配对)** |
 

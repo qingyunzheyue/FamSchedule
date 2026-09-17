@@ -1,23 +1,24 @@
 /**
- * AuthContext — T-SETUP-4
+ * AuthContext — T-SETUP-4 + T-US013-1 重构
  *
- * 职责:
- *   1. 启动时从 SecureStore 恢复 session(supabase-js SDK 自动做,我们只需监听)
- *   2. 无 session 时自动 signInAnonymously(ADR-002:首次启动 = 新 anon user)
- *   3. 监听 onAuthStateChange(token refresh / signOut / 重新登录)
- *   4. session 失效(token refresh 失败)时 SDK 会触发 SIGNED_OUT 事件,
- *      我们捕获后自动重新 signInAnonymously,让用户体验为"无感重连"
- *      注意:anon sign-in 拿新 user.id = 新设备身份,等于"卸载重装"语义;
- *      这是 MVP 设计选择(PRD A6 接受),家庭数据会跟着旧 user.id 走,需重新配对。
+ * 职责(从 T-US013-1 起,业务逻辑下沉到 AuthService):
+ *   1. 启动时从 AuthService 恢复 session(SDK + SecureStore 由 AuthService 封装)
+ *   2. 无 session 时调 AuthService.signInAnonymously()
+ *   3. 订阅 AuthService.subscribeAuthState(自动重连策略由 AuthService 处理)
+ *   4. 把 AuthState 翻译成 React state({user, session, isLoading})
+ *   5. 暴露 signOut() 给 UI:调 AuthService.markIntentionalSignOut() + clearSession(),
+ *      防止 AuthService 的自动重连逻辑接住这次登出
  *
- * 暴露 API:
+ * 暴露 API(对消费侧不变):
  *   - user           : User | null       — 当前 anon user
  *   - session        : Session | null    — 完整 session(access + refresh token)
  *   - isLoading      : boolean           — true 时 UI 应显示 splash,不渲染业务屏
- *   - signInAnonymously(): Promise<void> — 手动触发(目前未在 UI 暴露,但保留逃生口)
- *   - signOut()      : Promise<void>     — 清 SecureStore + SDK session
+ *   - signInAnonymously(): Promise<void> — 手动触发(目前未在 UI 暴露,作为逃生口保留)
+ *   - signOut()      : Promise<void>     — 标主动 + 清 SecureStore + SDK session
  *
  * 注意:
+ *   - 自动重连 anon 的逻辑(SDK 发 SIGNED_OUT 时自动 signIn)由 AuthService 处理,
+ *     AuthContext 只负责被动接收 state 变更
  *   - 不在此处触发 `create_family` RPC,那是 US-012 的事;AuthContext 只管"我是谁"
  *   - 不订阅 realtime,那是 SyncManager(T-SETUP-6)的事
  */
@@ -34,7 +35,14 @@ import {
 } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
-import { supabase } from '../lib/supabase';
+import {
+  signInAnonymously as authServiceSignInAnonymously,
+  restoreSession as authServiceRestoreSession,
+  clearSession as authServiceClearSession,
+  subscribeAuthState,
+  markIntentionalSignOut,
+  type AuthState,
+} from '../services/AuthService';
 
 export interface AuthContextValue {
   user: User | null;
@@ -59,50 +67,58 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  /**
+   * "用户主动登出" ref — React-state 版本的 intent 标记。
+   *
+   * 为什么用 ref 而不是 useState:这是**命令式**的事件标记,不是状态;
+   * 不应触发 re-render,只在 signOut 调用瞬间用一次。
+   *
+   * 流程(与 AuthService.markIntentionalSignOut 配合):
+   *   1. signOut() 第一行:ref.current = true
+   *   2. clearSession() → SDK 发 SIGNED_OUT → AuthService listener 看到 ref 标志
+   *      → 不自动重连,emit signed_out
+   *   3. useEffect 监听到 user 变 null → 检查 ref.current:为 true 时跳过重连 + reset
+   *      (AuthService 也已 reset 它,这里是 belt-and-suspenders)
+   *
+   * 双层防御:AuthService 有 module-level flag,AuthContext 有 ref,任一层失效另一层兜底。
+   */
+  const intentionalSignOutRef = useRef(false);
+
   useEffect(() => {
     let mounted = true;
 
     /**
      * 启动序列:
-     *   1. 尝试 getSession() — SDK 从 SecureStore 读 localStorage,若有则恢复
-     *   2. 若没 session,signInAnonymously() — 拿新 anon user.id,SDK 写回 SecureStore
-     *   3. 订阅 onAuthStateChange — 后续 token refresh / signOut 由它广播
+     *   1. AuthService.restoreSession() — SDK 从 SecureStore 读;若有 + 未过期直接返回
+     *   2. 若 signed_out → AuthService.signInAnonymously() — 拿新 anon user
+     *   3. 订阅 AuthService.subscribeAuthState — 后续 token refresh / SIGNED_OUT 由它广播
      *
      * 关键:无论分支,最后都要 setIsLoading(false),否则 UI 永远停在 splash。
      */
     const initialize = async (): Promise<void> => {
       try {
-        const { data, error } = await supabase.auth.getSession();
+        const restored = await authServiceRestoreSession();
         if (!mounted) return;
 
-        if (error) {
-          // eslint-disable-next-line no-console
-          console.error('[AuthContext] getSession error:', error);
-        }
-
-        if (data.session?.user) {
-          setSession(data.session);
-          setUser(data.session.user);
+        if (restored.status === 'signed_in') {
+          setSession(restored.session);
+          setUser(restored.user);
           return;
         }
 
-        // 无 session → 首次启动,Anon Sign-in
-        const { data: signInData, error: signInError } =
-          await supabase.auth.signInAnonymously();
+        // 无有效 session → 首次启动,Anon Sign-in
+        const signedIn = await authServiceSignInAnonymously();
         if (!mounted) return;
 
-        if (signInError) {
-          // eslint-disable-next-line no-console
-          console.error('[AuthContext] signInAnonymously error:', signInError);
-          return;
+        if (signedIn.status === 'signed_in') {
+          setSession(signedIn.session);
+          setUser(signedIn.user);
         }
-
-        setSession(signInData.session);
-        setUser(signInData.user);
+        // signed_in 失败 → isLoading 仍会走 finally;UI 进入 error 路径
       } catch (err) {
-        // 网络断开 / SecureStore 损坏 → 不阻塞 UI,isLoading=false 让用户看到 error UI
+        // 兜底:AuthService 自身已 try/catch,理论上不到这;显式记一行
         // eslint-disable-next-line no-console
-        console.error('[AuthContext] init threw:', err);
+        console.error('[AuthContext] init threw unexpectedly:', err);
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -111,66 +127,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     void initialize();
 
     /**
-     * 监听 auth 状态变化:
-     *   - TOKEN_REFRESHED   → session 更新,user 不变
-     *   - SIGNED_IN         → 新 session(可能是自动 signInAnonymously 完成)
-     *   - SIGNED_OUT        → 清掉 user/session(此时 isLoading 由 initialize 收尾)
-     *   - USER_UPDATED      → metadata 变化(MVP 不暴露 UI)
+     * 订阅 AuthService 事件。AuthService 已封装好:
+     *   - INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED / USER_UPDATED → signed_in
+     *   - SIGNED_OUT → signed_out(若非主动,内部自动 signInAnonymously 重连)
      *
-     * session 失效场景:SIGNED_OUT + 没有 user → 客户端自动重连 anon。
-     * 这里不直接在 listener 里调 signInAnonymously,避免和 initialize 双重调用,
-     * 而是用一个 effect 监听 user 变 null 且不是初次加载时重连。
+     * AuthContext 只负责把 AuthState 翻译成 React state。
      */
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const unsubscribe = subscribeAuthState((state: AuthState) => {
       if (!mounted) return;
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
+      if (state.status === 'signed_in') {
+        setSession(state.session);
+        setUser(state.user);
+      } else if (state.status === 'signed_out') {
+        setSession(null);
+        setUser(null);
+      }
+      // 'loading' 状态本模块不主动 emit;但若未来加,这里可加分支
     });
 
     return () => {
       mounted = false;
-      subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
-
-  /**
-   * 自动重连 anon:当 user 由有变无(SIGNED_OUT 且非初次),重发 signInAnonymously。
-   * 用 useEffect 而非在 onAuthStateChange 内直接调,避免闭包陷阱。
-   *
-   * 例外:若用户主动调 signOut(),不应该自动重连(那样就登不出了)。
-   * 通过 `intentionalSignOutRef` 标记"我刚主动登的",effect 看到标志就跳过本次重连。
-   */
-  const intentionalSignOutRef = useRef(false);
-
-  useEffect(() => {
-    if (isLoading) return; // 初次加载中
-    if (user) return; // 有 user 不动
-    if (intentionalSignOutRef.current) {
-      intentionalSignOutRef.current = false;
-      return;
-    }
-
-    // session 失效 → 自动重连
-    void (async () => {
-      try {
-        const { data, error } = await supabase.auth.signInAnonymously();
-        if (error) {
-          // eslint-disable-next-line no-console
-          console.error('[AuthContext] auto re-signInAnonymously failed:', error);
-          return;
-        }
-        if (data.session) {
-          setSession(data.session);
-          setUser(data.user);
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[AuthContext] auto re-signInAnonymously threw:', err);
-      }
-    })();
-  }, [user, isLoading]);
 
   /**
    * 手动 signInAnonymously:当前未在 UI 暴露,作为逃生口保留。
@@ -179,33 +158,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signInAnonymously = useCallback(async (): Promise<void> => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase.auth.signInAnonymously();
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error('[AuthContext] manual signInAnonymously error:', error);
-        return;
+      const state = await authServiceSignInAnonymously();
+      if (state.status === 'signed_in') {
+        setSession(state.session);
+        setUser(state.user);
       }
-      setSession(data.session);
-      setUser(data.user);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   /**
-   * 主动登出:清 SecureStore + SDK session。
-   * 标记 intentionalSignOut 阻止自动重连 effect 再触发。
+   * 主动登出:
+   *   1. 标记 intentionalSignOut(AuthService 会据此跳过自动重连)
+   *   2. 清 SecureStore + SDK session
+   *   3. 清 React state
    */
   const signOut = useCallback(async (): Promise<void> => {
     intentionalSignOutRef.current = true;
+    markIntentionalSignOut(); // 通知 AuthService
     setIsLoading(true);
     try {
-      await supabase.auth.signOut();
+      await authServiceClearSession();
       setSession(null);
       setUser(null);
     } catch (err) {
+      // AuthService 已 try/catch;理论上不到这;显式记一行
       // eslint-disable-next-line no-console
-      console.error('[AuthContext] signOut error:', err);
+      console.error('[AuthContext] signOut threw:', err);
     } finally {
       setIsLoading(false);
     }
