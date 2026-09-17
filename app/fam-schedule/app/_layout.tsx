@@ -1,11 +1,11 @@
 import { useFonts } from 'expo-font';
-import { SplashScreen, Stack, Redirect, useRouter, usePathname } from 'expo-router';
+import { SplashScreen as ExpoSplashScreen, Stack, Redirect, useRouter, usePathname } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
-import { ActivityIndicator } from 'react-native';
-import { TamaguiProvider, Theme, YStack } from 'tamagui';
+import { TamaguiProvider, Theme } from 'tamagui';
 
 import config from '../src/theme/tamagui.config';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
+import { SplashScreen } from '../src/screens/SplashScreen';
 import {
   init as initNotificationScheduler,
   requestNotificationPermission,
@@ -19,7 +19,7 @@ import NotoSansSCSemibold from '../assets/fonts/NotoSansSC-Semibold.ttf';
 
 // Android 8+ 上 system font fallback 链(design-v1.0 §1.2)
 // useFonts 加载失败时 Tamagui 仍能渲染,只是字重 fallback
-SplashScreen.preventAutoHideAsync();
+ExpoSplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   // expo-font 加载自打包 TTF
@@ -38,7 +38,7 @@ export default function RootLayout() {
       console.error('[FamSchedule] Font load error:', fontError);
     }
     if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
+      ExpoSplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
 
@@ -53,10 +53,11 @@ export default function RootLayout() {
           T-SETUP-9 接入 settings 里的手动开关;当前 defaultTheme 写死 light,
           后续可在 RootLayout 读 useColorScheme() 动态切换 defaultTheme。 */}
       <Theme name="light">
-        {/* T-SETUP-4:AuthProvider 包在 Stack 外、Theme 内。
-            - 启动时 signInAnonymously / 恢复 session 由内部 effect 处理
-            - isLoading 时渲染 splash 视图(纯 ActivityIndicator,无业务 UI),
-              避免闪一下未登录态的 stack */}
+        {/* T-SETUP-4 + T-US013-2:AuthProvider 包在 Stack 外、Theme 内。
+            - 启动时 AuthContext.initialize() 调 bootGuard(retry-once 启动守卫)
+            - isLoading=true 时渲染 SplashScreen(loading 模式),避免闪一下未登录态的 stack
+            - bootError 非空时 Gate 渲染 SplashScreen(error 模式)+ 重试按钮
+              (SplashScreen 抽到 src/screens/,见 splash-v1.0.md 设计契约) */}
         <AuthProvider>
           <Gate />
         </AuthProvider>
@@ -83,14 +84,26 @@ export default function RootLayout() {
  *   - 旧版 `useNotificationSchedulerInit()` 在 Gate 顶层无条件调,
  *     useEffect 早于 family 查询 commit → 弹框时序错误。本修复改用
  *     显式 import + 两个 useEffect 拆开,语义更清晰。
+ *
+ * T-US013-2:启动错误优先于其他 splash 状态显示。
+ *   - bootError 非空 → 直接渲染 SplashScreen error 模式 + "重试" 按钮
+ *     (auth 都没过 → 谈家庭/路由都没意义,直接阻塞错误占位等用户重试)
+ *   - 重试按钮调 useAuth().retryBoot() → 重新跑一次 bootGuard(同样 retry-once 1s 退避)
+ *   - 之前 splash 是 inline ActivityIndicator;现抽到 src/screens/SplashScreen.tsx,
+ *     配 design-v1.0 §3 布局 + splash-v1.0.md §5 error 状态
+ *
+ * ⚠️ 本组件历史上有个 `bootError` state 实际只接 family 查询错误(变量名误导),
+ *    已经在本任务里改名为 `familyQueryError`,语义清晰化;原 UI 行为不变 —
+ *    family 查询错误时 familyId=null,自然走 onboarding 路径,用户能看到 pair-create 页。
  */
 function Gate() {
   const router = useRouter();
   const pathname = usePathname();
-  const { isLoading, session } = useAuth();
+  const { isLoading, session, bootError, retryBoot } = useAuth();
   const [familyId, setFamilyId] = useState<string | null>(null);
   const [familyLoading, setFamilyLoading] = useState(true);
-  const [bootError, setBootError] = useState<string | null>(null);
+  // 家庭查询错误(与 auth 启动错误是两条独立路径,各自 UI 路径不同)
+  const [familyQueryError, setFamilyQueryError] = useState<string | null>(null);
   // 用一个递增的 key 触发手动刷新 — pair-create / pair-join
   // 在 RPC 成功后 router.replace 会带动 pathname 变化,也会触发此 effect。
   const [refreshTick, setRefreshTick] = useState(0);
@@ -130,17 +143,17 @@ function Gate() {
         if (error) {
           // eslint-disable-next-line no-console
           console.error('[Gate] family_members query error:', error);
-          setBootError(error.message);
+          setFamilyQueryError(error.message);
           setFamilyId(null);
         } else {
           setFamilyId(data?.family_id ?? null);
-          setBootError(null);
+          setFamilyQueryError(null);
         }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[Gate] family_members query threw:', err);
         if (mounted) {
-          setBootError(err instanceof Error ? err.message : String(err));
+          setFamilyQueryError(err instanceof Error ? err.message : String(err));
           setFamilyId(null);
         }
       } finally {
@@ -178,13 +191,15 @@ function Gate() {
     router.replace('/(main)/(home)');
   }, [isLoading, familyLoading, session, familyId, router]);
 
-  // 任一加载未完成:显示 splash
+  // T-US013-2:启动错误优先于其他 splash 状态显示
+  // (auth 都没过 → 谈家庭/路由都没意义,直接阻塞错误占位等用户重试)
+  if (bootError) {
+    return <SplashScreen mode="error" errorMessage={bootError.message} onRetry={retryBoot} />;
+  }
+
+  // 任一加载未完成:显示 splash(loading 模式)
   if (isLoading || familyLoading) {
-    return (
-      <YStack flex={1} alignItems="center" justifyContent="center" backgroundColor="$background">
-        <ActivityIndicator size="large" color="#DC5A24" />
-      </YStack>
-    );
+    return <SplashScreen />;
   }
 
   // 没 session(理论上 AuthProvider 自动重连,这里只是兜底)→ 渲染根 Stack

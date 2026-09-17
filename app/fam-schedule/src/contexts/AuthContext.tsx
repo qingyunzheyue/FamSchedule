@@ -1,26 +1,32 @@
 /**
- * AuthContext — T-SETUP-4 + T-US013-1 重构
+ * AuthContext — T-SETUP-4 + T-US013-1 重构 + T-US013-2 启动守卫接入
  *
  * 职责(从 T-US013-1 起,业务逻辑下沉到 AuthService):
- *   1. 启动时从 AuthService 恢复 session(SDK + SecureStore 由 AuthService 封装)
- *   2. 无 session 时调 AuthService.signInAnonymously()
- *   3. 订阅 AuthService.subscribeAuthState(自动重连策略由 AuthService 处理)
- *   4. 把 AuthState 翻译成 React state({user, session, isLoading})
- *   5. 暴露 signOut() 给 UI:调 AuthService.markIntentionalSignOut() + clearSession(),
+ *   1. 启动时调 bootGuard 拿 session(T-US013-2,封装 restoreSession + signInAnonymously + retry-once)
+ *   2. 订阅 AuthService.subscribeAuthState(自动重连策略由 AuthService 处理)
+ *   3. 把 AuthState 翻译成 React state({user, session, isLoading, bootError})
+ *   4. 暴露 signOut() 给 UI:调 AuthService.markIntentionalSignOut() + clearSession(),
  *      防止 AuthService 的自动重连逻辑接住这次登出
+ *   5. 暴露 retryBoot() 给 UI:用户点击错误屏的"重试"按钮时,重新跑一次 bootGuard
  *
- * 暴露 API(对消费侧不变):
+ * 暴露 API(对消费侧不变 + T-US013-2 新增):
  *   - user           : User | null       — 当前 anon user
  *   - session        : Session | null    — 完整 session(access + refresh token)
  *   - isLoading      : boolean           — true 时 UI 应显示 splash,不渲染业务屏
+ *   - bootError      : Error | null      — T-US013-2 新增;bootGuard 两次都失败时非空
  *   - signInAnonymously(): Promise<void> — 手动触发(目前未在 UI 暴露,作为逃生口保留)
  *   - signOut()      : Promise<void>     — 标主动 + 清 SecureStore + SDK session
+ *   - retryBoot()    : Promise<void>     — T-US013-2 新增;bootGuard 失败后用户主动重试
  *
  * 注意:
  *   - 自动重连 anon 的逻辑(SDK 发 SIGNED_OUT 时自动 signIn)由 AuthService 处理,
  *     AuthContext 只负责被动接收 state 变更
  *   - 不在此处触发 `create_family` RPC,那是 US-012 的事;AuthContext 只管"我是谁"
  *   - 不订阅 realtime,那是 SyncManager(T-SETUP-6)的事
+ *   - T-US013-2:session 通过 subscribeAuthState listener 写入,不在这里手动 setSession
+ *     — bootGuard 调 AuthService.signInAnonymously() 会触发 SDK onAuthStateChange(SIGNED_IN),
+ *     listener 已订阅,自动 setSession。restoreSession 路径同理:订阅时 SDK 会发 INITIAL_SESSION,
+ *     带当前 session 一起过来。
  */
 
 import {
@@ -36,19 +42,23 @@ import type { Session, User } from '@supabase/supabase-js';
 
 import {
   signInAnonymously as authServiceSignInAnonymously,
-  restoreSession as authServiceRestoreSession,
   clearSession as authServiceClearSession,
   subscribeAuthState,
   markIntentionalSignOut,
   type AuthState,
 } from '../services/AuthService';
+import { bootGuard } from '../lib/bootGuard';
 
 export interface AuthContextValue {
   user: User | null;
   session: Session | null;
   isLoading: boolean;
+  /** T-US013-2 新增:bootGuard 两次都失败时非空。Gate 据此渲染 SplashScreen error 模式 + 重试按钮 */
+  bootError: Error | null;
   signInAnonymously: () => Promise<void>;
   signOut: () => Promise<void>;
+  /** T-US013-2 新增:用户点击"重试"按钮后调,重新跑一次 bootGuard */
+  retryBoot: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -65,6 +75,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // T-US013-2:bootGuard 失败时非空;Gate 据此切到 SplashScreen error 模式 + 重试按钮
+  const [bootError, setBootError] = useState<Error | null>(null);
 
   /**
    * 主动登出意图标记:
@@ -80,37 +92,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
     let mounted = true;
 
     /**
-     * 启动序列:
-     *   1. AuthService.restoreSession() — SDK 从 SecureStore 读;若有 + 未过期直接返回
-     *   2. 若 signed_out → AuthService.signInAnonymously() — 拿新 anon user
-     *   3. 订阅 AuthService.subscribeAuthState — 后续 token refresh / SIGNED_OUT 由它广播
+     * 启动序列(T-US013-2):
+     *   1. bootGuard() — 封装 restoreSession + signInAnonymously + retry-once(详见 src/lib/bootGuard)
+     *   2. 订阅 AuthService.subscribeAuthState — 后续 token refresh / SIGNED_OUT 由它广播
      *
-     * 关键:无论分支,最后都要 setIsLoading(false),否则 UI 永远停在 splash。
+     * session 怎么落到 React state:
+     *   - restoreSession 路径:SDK 内部从 SecureStore 读到 session,subscribeAuthState 在下面同步订阅,
+     *     SDK 订阅瞬间会 emit INITIAL_SESSION 带当前 session → listener → setSession
+     *   - signInAnonymously 路径:supabase.auth.signInAnonymously() 触发 onAuthStateChange(SIGNED_IN),
+     *     listener 已注册 → setSession
+     *   因此本函数不需要手动 setSession;只需根据 bootGuard 结果决定 setBootError。
+     *
+     * 关键:无论 ready/failed,最后都要 setIsLoading(false),否则 UI 永远停在 splash。
+     *   ready 路径:session 由 listener 异步写入,isLoading 先 false,Gate 短暂渲染 splash → listener 触发 → session 落定
+     *   failed 路径:bootError 落定,Gate 切 error 模式
      */
     const initialize = async (): Promise<void> => {
       try {
-        const restored = await authServiceRestoreSession();
+        const result = await bootGuard();
         if (!mounted) return;
 
-        if (restored.status === 'signed_in') {
-          setSession(restored.session);
-          setUser(restored.user);
-          return;
+        if (result.status === 'failed') {
+          setBootError(result.error);
         }
-
-        // 无有效 session → 首次启动,Anon Sign-in
-        const signedIn = await authServiceSignInAnonymously();
-        if (!mounted) return;
-
-        if (signedIn.status === 'signed_in') {
-          setSession(signedIn.session);
-          setUser(signedIn.user);
-        }
-        // signed_in 失败 → isLoading 仍会走 finally;UI 进入 error 路径
+        // ready → session 由 subscribeAuthState listener 写入(见上方注释)
       } catch (err) {
-        // 兜底:AuthService 自身已 try/catch,理论上不到这;显式记一行
+        // 兜底:bootGuard 自身不抛(内部 try/catch),理论上不到这;显式记一行
         // eslint-disable-next-line no-console
         console.error('[AuthContext] init threw unexpectedly:', err);
+        if (mounted) {
+          setBootError(err instanceof Error ? err : new Error(String(err)));
+        }
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -183,12 +195,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   /**
+   * T-US013-2:用户点击 SplashScreen 错误模式的"重试"按钮后调用。
+   *
+   * 与 initialize 的差异:
+   *   - 显式清掉 bootError(让 UI 立刻从 error 切回 loading 模式)
+   *   - 走同一份 bootGuard 逻辑(retry-once 1s 退避照常生效),
+   *     所以"重试"语义对用户是"再给我一次 2 次机会" 而不是"再来 1 次"
+   *
+   * 状态机:
+   *   error → 点击重试 → 清 bootError + isLoading=true → bootGuard →
+   *     ready → setIsLoading=false(session 由 listener 写入)→ UI 进业务屏
+   *     failed → setBootError → UI 仍 error,可再次点击重试
+   */
+  const retryBoot = useCallback(async (): Promise<void> => {
+    setBootError(null);
+    setIsLoading(true);
+    try {
+      const result = await bootGuard();
+      if (result.status === 'failed') {
+        setBootError(result.error);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[AuthContext] retryBoot threw unexpectedly:', err);
+      setBootError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  /**
    * useMemo 包 value,避免引用变更触发消费侧不必要的 re-render。
    * (虽然本组件目前消费侧没有用 memo,但养成习惯。)
    */
   const value = useMemo<AuthContextValue>(
-    () => ({ user, session, isLoading, signInAnonymously, signOut }),
-    [user, session, isLoading, signInAnonymously, signOut],
+    () => ({ user, session, isLoading, bootError, signInAnonymously, signOut, retryBoot }),
+    [user, session, isLoading, bootError, signInAnonymously, signOut, retryBoot],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
