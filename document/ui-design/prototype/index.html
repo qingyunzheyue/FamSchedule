@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FamSchedule 设计原型 · 屏幕导览</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-success: #5C9D7E;
+  --color-warning: #E0A341;
+  --color-error: #C95444;
+  --radius-lg: 14px; --radius-xl: 20px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+  --shadow-2: 0 2px 4px rgba(58,46,32,0.08), 0 4px 8px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: linear-gradient(135deg, #F4ECDC 0%, #E8DFC8 100%);
+  color: var(--color-text-primary);
+  min-height: 100vh;
+  padding: 40px 24px 80px;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+.hero { text-align: center; margin-bottom: 56px; }
+.logo-row { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 20px; }
+.logo { width: 64px; height: 64px; background: var(--color-primary); border-radius: 18px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px -4px rgba(220,90,36,0.3); }
+h1 { font-size: 36px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.5px; }
+.subtitle { font-size: 16px; color: var(--color-text-secondary); margin: 0 0 24px; }
+.specs { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; margin-bottom: 32px; font-size: 13px; color: var(--color-text-secondary); }
+.spec { background: var(--color-surface); border: 1px solid var(--color-border); padding: 8px 16px; border-radius: 999px; }
+.tour-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 14px 32px; font-size: 16px; font-weight: 500;
+  background: var(--color-primary); color: #fff; border: none; border-radius: 12px;
+  cursor: pointer; box-shadow: 0 8px 20px -4px rgba(220,90,36,0.4);
+  transition: all 0.2s;
+}
+.tour-btn:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -4px rgba(220,90,36,0.5); }
+.flow-section { margin-bottom: 48px; }
+.flow-title { font-size: 18px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: center; gap: 10px; }
+.flow-title .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: var(--color-primary); color: #fff; border-radius: 50%; font-size: 13px; font-weight: 600; }
+.flow-desc { font-size: 14px; color: var(--color-text-secondary); margin: 0 0 20px; padding-left: 38px; }
+.screen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding-left: 38px; }
+.screen-card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: 20px; text-decoration: none; color: inherit;
+  transition: all 0.2s; box-shadow: var(--shadow-1);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.screen-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--color-primary); }
+.card-preview {
+  aspect-ratio: 375/280; background: var(--color-background); border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  position: relative; border: 1px solid var(--color-border);
+}
+.preview-content { width: 75%; height: 88%; background: var(--color-surface); border-radius: 6px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: flex; flex-direction: column; gap: 6px; }
+.preview-bar { height: 6px; background: var(--color-border); border-radius: 3px; }
+.preview-bar.primary { background: var(--color-primary); }
+.preview-bar.a { background: var(--color-identity-b); }
+.preview-bar.short { width: 50%; }
+.card-info { display: flex; align-items: center; justify-content: space-between; }
+.card-name { font-size: 16px; font-weight: 500; margin: 0; }
+.card-tag { font-size: 11px; padding: 2px 8px; background: var(--color-background); color: var(--color-text-secondary); border-radius: 999px; }
+.card-desc { font-size: 13px; color: var(--color-text-secondary); margin: 0; line-height: 1.5; }
+.card-meta { font-size: 12px; color: var(--color-text-tertiary); display: flex; align-items: center; gap: 6px; }
+.footer { text-align: center; margin-top: 80px; padding-top: 32px; border-top: 1px solid var(--color-border); color: var(--color-text-tertiary); font-size: 13px; }
+.footer p { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header class="hero">
+    <div class="logo-row">
+      <div class="logo">
+        <svg width="38" height="38" viewBox="0 0 64 64" fill="none">
+          <path d="M32 12 L48 26 L48 50 L36 50 L36 38 L28 38 L28 50 L16 50 L16 26 Z" fill="#FFF9F0"/>
+          <rect x="42" y="14" width="14" height="14" rx="2" fill="#FFF9F0" opacity="0.9"/>
+        </svg>
+      </div>
+    </div>
+    <h1>FamSchedule 设计原型</h1>
+    <p class="subtitle">家里的小日程 · 暖色家庭感 × React Native + Expo SDK 52</p>
+    <div class="specs">
+      <span class="spec">🎨 7 项设计决策已锁定</span>
+      <span class="spec">📱 9 个核心屏幕</span>
+      <span class="spec">🌊 5 个交互流程</span>
+      <span class="spec">🌗 亮/暗双模式</span>
+      <span class="spec">♿ WCAG AA</span>
+    </div>
+    <button class="tour-btn" onclick="startTour()">
+      开始巡览
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+    </button>
+  </header>
+
+  <!-- Flow 1: Onboarding & Pairing -->
+  <section class="flow-section">
+    <h2 class="flow-title"><span class="num">1</span> 启动与配对</h2>
+    <p class="flow-desc">从首次启动到家庭建立,共 4 步。</p>
+    <div class="screen-grid">
+      <a href="splash-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div style="height: 20px;"></div>
+            <div class="preview-bar primary" style="width: 40%; align-self: center;"></div>
+            <div class="preview-bar short" style="align-self: center;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">splash</h3>
+          <span class="card-tag">启动页</span>
+        </div>
+        <p class="card-desc">Anon Sign-in + 拉取家庭信息;展示品牌视觉</p>
+        <p class="card-meta">US-013 · 1 屏</p>
+      </a>
+
+      <a href="pair-home-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar short"></div>
+            <div class="preview-bar" style="width: 70%;"></div>
+            <div class="preview-bar primary" style="height: 30px; margin-top: 8px;"></div>
+            <div class="preview-bar" style="height: 30px;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">pair-home</h3>
+          <span class="card-tag">配对主页</span>
+        </div>
+        <p class="card-desc">创建家庭 / 加入家庭 二选一</p>
+        <p class="card-meta">US-012 · 4 状态</p>
+      </a>
+
+      <a href="pair-create-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar short" style="align-self: center;"></div>
+            <div style="display: flex; gap: 2px; justify-content: center; margin: 8px 0;">
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+            </div>
+            <div class="preview-bar short" style="align-self: center;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">pair-create</h3>
+          <span class="card-tag">邀请码展示</span>
+        </div>
+        <p class="card-desc">6 位邀请码 + 10 分钟倒计时</p>
+        <p class="card-meta">US-012 · 5 状态</p>
+      </a>
+
+      <a href="pair-join-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar short" style="align-self: center;"></div>
+            <div style="display: flex; gap: 2px; justify-content: center; margin: 8px 0;">
+              <div class="preview-bar" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar primary" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar" style="width: 12%; height: 24px;"></div>
+              <div class="preview-bar" style="width: 12%; height: 24px;"></div>
+            </div>
+            <div class="preview-bar primary" style="height: 22px; margin-top: 8px;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">pair-join</h3>
+          <span class="card-tag">输入邀请码</span>
+        </div>
+        <p class="card-desc">6 位数字输入器,带错误态</p>
+        <p class="card-meta">US-012 · 7 状态</p>
+      </a>
+    </div>
+  </section>
+
+  <!-- Flow 2: Core Task Loop -->
+  <section class="flow-section">
+    <h2 class="flow-title"><span class="num">2</span> 核心任务流</h2>
+    <p class="flow-desc">创建 → 列表 → 详情 → 打卡(带补卡/撤销)。</p>
+    <div class="screen-grid">
+      <a href="home-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar" style="width: 60%;"></div>
+            <div class="preview-bar short" style="background: var(--color-warning); width: 80%; height: 16px; margin: 4px 0;"></div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 6px;">
+              <div class="preview-bar short" style="background: var(--color-primary); width: 30%;"></div>
+              <div class="preview-bar" style="width: 50%; height: 4px; margin-top: 3px;"></div>
+            </div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 6px;">
+              <div class="preview-bar short" style="width: 50%;"></div>
+              <div class="preview-bar" style="width: 40%; height: 4px; margin-top: 3px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">home</h3>
+          <span class="card-tag">任务列表</span>
+        </div>
+        <p class="card-desc">今天/本周/全部 + 过期 banner + 卡片任务</p>
+        <p class="card-meta">US-002/005/014/015 · 9 状态</p>
+      </a>
+
+      <a href="task-create-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar" style="width: 100%; height: 16px;"></div>
+            <div class="preview-bar" style="width: 100%; height: 16px;"></div>
+            <div class="preview-bar" style="width: 100%; height: 16px;"></div>
+            <div style="display: flex; gap: 3px;">
+              <div class="preview-bar primary" style="width: 30%; height: 14px; border-radius: 7px;"></div>
+              <div class="preview-bar" style="width: 30%; height: 14px; border-radius: 7px;"></div>
+            </div>
+            <div class="preview-bar" style="width: 100%; height: 30px; margin-top: 4px;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">task-create</h3>
+          <span class="card-tag">创建/编辑任务</span>
+        </div>
+        <p class="card-desc">表单(标题/时间/指派人/周期/共享)</p>
+        <p class="card-meta">US-001/003/004 · 5 状态</p>
+      </a>
+
+      <a href="task-detail-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 8px;">
+              <div class="preview-bar short"></div>
+              <div class="preview-bar" style="width: 40%; height: 4px; margin-top: 4px;"></div>
+              <div class="preview-bar primary" style="width: 100%; height: 16px; margin-top: 6px;"></div>
+            </div>
+            <div class="preview-bar" style="width: 80%;"></div>
+            <div class="preview-bar" style="width: 60%;"></div>
+            <div class="preview-bar" style="width: 70%;"></div>
+            <div class="preview-bar" style="width: 50%;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">task-detail</h3>
+          <span class="card-tag">任务详情</span>
+        </div>
+        <p class="card-desc">打卡主按钮 + 分组(指派人/周期/历史)</p>
+        <p class="card-meta">US-003/005/006/014 · 5 状态</p>
+      </a>
+    </div>
+  </section>
+
+  <!-- Flow 3: Family & Settings -->
+  <section class="flow-section">
+    <h2 class="flow-title"><span class="num">3</span> 家庭 & 设置</h2>
+    <p class="flow-desc">家庭关系仪表板 + 集中设置(4 个二级页)。</p>
+    <div class="screen-grid">
+      <a href="family-dashboard-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar" style="width: 50%;"></div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 6px; margin: 4px 0;">
+              <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+                <div class="preview-bar primary" style="width: 16px; height: 16px; border-radius: 50%;"></div>
+                <div class="preview-bar" style="width: 60%; height: 8px;"></div>
+              </div>
+              <div style="display: flex; gap: 4px;">
+                <div class="preview-bar a" style="width: 16px; height: 16px; border-radius: 50%;"></div>
+                <div class="preview-bar" style="width: 60%; height: 8px;"></div>
+              </div>
+            </div>
+            <div class="preview-bar short" style="background: var(--color-primary); width: 100%; height: 8px;"></div>
+            <div class="preview-bar short" style="background: var(--color-identity-b); width: 70%; height: 8px;"></div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">family-dashboard</h3>
+          <span class="card-tag">家庭 Tab</span>
+        </div>
+        <p class="card-desc">成员卡 + 邀请码 + 完成度 + 共享任务</p>
+        <p class="card-meta">US-011/012 · 5 状态</p>
+      </a>
+
+      <a href="settings-v1.0.html" class="screen-card" target="_blank">
+        <div class="card-preview">
+          <div class="preview-content">
+            <div class="preview-bar short" style="background: var(--color-text-tertiary);"></div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 4px 6px;">
+              <div class="preview-bar" style="width: 80%; height: 6px;"></div>
+            </div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 4px 6px;">
+              <div class="preview-bar" style="width: 70%; height: 6px;"></div>
+            </div>
+            <div class="preview-bar short" style="background: var(--color-text-tertiary);"></div>
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; padding: 4px 6px;">
+              <div class="preview-bar" style="width: 60%; height: 6px;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-info">
+          <h3 class="card-name">settings</h3>
+          <span class="card-tag">设置 + 4 子页</span>
+        </div>
+        <p class="card-desc">分组列表 + 推送/任务规则/白名单/关于/反馈</p>
+        <p class="card-meta">US-006/008/015/016/017 · 7 页面</p>
+      </a>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>📐 设计规范 <a href="../design-v1.0.md" style="color: var(--color-primary);">design-v1.0.md</a> · 流程图 <a href="../flows-v1.0.md" style="color: var(--color-primary);">flows-v1.0.md</a></p>
+    <p>© 2026 FamSchedule · 仅供家庭内部使用</p>
+    <p style="margin-top: 12px; font-size: 11px;">PRD v1.3 (Approved) · arch-v1.0 + ADR-001~007</p>
+  </footer>
+
+</div>
+
+<script>
+const tour = [
+  'splash-v1.0.html',
+  'pair-home-v1.0.html',
+  'pair-create-v1.0.html',
+  'pair-join-v1.0.html',
+  'home-v1.0.html',
+  'task-create-v1.0.html',
+  'task-detail-v1.0.html',
+  'family-dashboard-v1.0.html',
+  'settings-v1.0.html'
+];
+let tourIdx = 0;
+function startTour() {
+  const w = window.open(tour[0], '_blank');
+  tourIdx = 1;
+  alert('巡览已开始!\n\n已打开: ' + tour[0] + '\n\n接下来按顺序浏览:\n' + tour.slice(1).map((s, i) => (i + 2) + '. ' + s).join('\n'));
+}
+</script>
+</body>
+</html>

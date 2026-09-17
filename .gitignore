@@ -1,0 +1,153 @@
+# FamSchedule — root .gitignore
+# 覆盖整个工作区(包括 doc/, supabase/, scripts/, app/fam-schedule/)
+# 子项目(app/fam-schedule/.gitignore)继续管 RN/Expo 自己的事
+
+# ============================================================
+# Secrets(必须!)
+# ============================================================
+.env
+.env.local
+.env.*.local
+*.env.local
+!.env.example
+!.env.sample
+
+# Supabase keys / service_role
+*service_role*
+*service-role*
+
+# Keystores / signing
+*.keystore
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# ============================================================
+# Dependencies
+# ============================================================
+node_modules/
+**/node_modules/
+.pnp/
+.pnp.js
+
+# ============================================================
+# Expo / React Native
+# ============================================================
+.expo/
+**/.expo/
+.expo-shared/
+**/.expo-shared/
+dist/
+web-build/
+expo-env.d.ts
+**/expo-env.d.ts
+
+# Metro
+.metro-health-check*
+.metro-cache/
+
+# ============================================================
+# Native build(由 expo prebuild 重新生成)
+# ============================================================
+# Expo app 子项目自己的 native 文件夹
+/app/fam-schedule/android
+/app/fam-schedule/ios
+
+# 通用 native 模式(防止以后误提交)
+**/android/
+**/android/build/
+**/ios/build/
+**/Pods/
+
+# ============================================================
+# Build outputs
+# ============================================================
+*.apk
+*.aab
+*.ipa
+*.app
+*.dmg
+
+# ============================================================
+# Logs / debug
+# ============================================================
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+pnpm-debug.*
+lerna-debug.*
+
+# ============================================================
+# OS / IDE
+# ============================================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# ============================================================
+# TypeScript
+# ============================================================
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# ============================================================
+# Supabase CLI artifacts
+# ============================================================
+supabase/.temp/
+supabase/.branches/
+**/.temp/
+**/.branches/
+
+# ============================================================
+# Test artifacts
+# ============================================================
+coverage/
+**/coverage/
+.nyc_output/
+**/.nyc_output/
+
+# ============================================================
+# Build / cache 杂项
+# ============================================================
+.cache/
+.parcel-cache/
+.next/
+out/
+build/
+**/build/
+
+# npx 临时文件
+.npx-version.err
+.npx-version.out
+**/.npm-install.err
+**/.npm-install.out
+
+# 脚本/CLI 输出临时文件(Supabase CLI / eas CLI 历史日志)
+**/.link.out
+**/.login.out
+**/.push.out
+**/.deploy.out
+**/.verify.out
+
+# Mavis runtime / agent config
+.claude/
+**/.claude/
+**/AGENTS.md
+**/CLAUDE.md
+
+# ============================================================
+# Notes(可保留,但通常个人项目也忽略)
+# ============================================================
+*.tmp
+*.bak
+*.swp
+*.orig

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pair Create 邀请码展示 · FamSchedule 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-identity-b-bg: #E1E8ED;
+  --color-success: #5C9D7E;
+  --color-success-bg: #E8F0EA;
+  --color-success-text: #2E5945;
+  --color-warning: #E0A341;
+  --color-warning-bg: #FBF1DC;
+  --color-warning-text: #7A5615;
+  --radius-md: 10px; --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+  --shadow-2: 0 2px 4px rgba(58,46,32,0.08), 0 4px 8px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #E5DCC5; color: var(--color-text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #fff; padding: 12px 20px; border-radius: var(--radius-lg); box-shadow: var(--shadow-1); margin-bottom: 20px; max-width: 1320px; width: 100%; }
+.toolbar h1 { font-size: 15px; font-weight: 600; margin: 0 12px 0 0; }
+.toolbar .group { display: flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 12px; color: var(--color-text-secondary); margin-right: 4px; }
+.toolbar button { padding: 6px 12px; font-size: 12px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.toolbar button:hover { background: var(--color-background); }
+.toolbar button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.phone { background: var(--color-background); border-radius: 32px; box-shadow: 0 24px 48px -12px rgba(58,46,32,0.25); overflow: hidden; position: relative; transition: width 0.3s, height 0.3s; width: 375px; height: 812px; }
+.phone.mobile { width: 375px; height: 812px; }
+.phone.tablet { width: 768px; height: 1024px; }
+.phone.desktop { width: 1280px; height: 800px; }
+.phone.dark { --color-background: #1A1814; --color-surface: #25221D; --color-text-primary: #F4ECDC; --color-text-secondary: #A89B86; --color-text-tertiary: #6E6452; --color-border: #3A332B; }
+.status-bar { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; font-size: 12px; font-weight: 600; color: var(--color-text-primary); }
+.nav-bar { height: 48px; display: flex; align-items: center; padding: 0 8px; }
+.content { padding: 0 20px 20px; height: calc(100% - 28px - 48px); overflow-y: auto; }
+.variant { display: none; width: 100%; height: 100%; }
+.variant.active { display: flex; flex-direction: column; }
+.code-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 24px 0; }
+.code-cell { aspect-ratio: 0.78; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 600; color: var(--color-primary); font-feature-settings: 'tnum' on; }
+.btn { padding: 14px 24px; font-size: 15px; font-weight: 500; border: none; border-radius: 10px; cursor: pointer; transition: all 0.15s; }
+.btn-primary { background: var(--color-primary); color: #fff; width: 100%; }
+.btn-primary:hover { background: #C04E1E; }
+.btn-ghost { background: transparent; color: var(--color-text-secondary); }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; font-size: 13px; cursor: pointer; }
+.chip:hover { background: var(--color-background); }
+.toast { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); background: #33302B; color: #fff; padding: 12px 20px; border-radius: 10px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 100; animation: slideUp 0.25s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideUp { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>📱 Pair Create · 邀请码展示</h1>
+  <div class="group">
+    <label>状态:</label>
+    <button class="state-btn active" data-state="default">default</button>
+    <button class="state-btn" data-state="countdown-low">倒计时低</button>
+    <button class="state-btn" data-state="expired">expired</button>
+    <button class="state-btn" data-state="spouse-joined">已加入</button>
+    <button class="state-btn" data-state="copy-success">复制成功</button>
+  </div>
+  <div class="group">
+    <label>视口:</label>
+    <button class="vp-btn active" data-vp="mobile">📱 375</button>
+    <button class="vp-btn" data-vp="tablet">📱 768</button>
+    <button class="vp-btn" data-vp="desktop">🖥 1280</button>
+  </div>
+  <div class="group">
+    <label>主题:</label>
+    <button class="theme-btn active" data-theme="light">☀ 亮</button>
+    <button class="theme-btn" data-theme="dark">🌙 暗</button>
+  </div>
+</div>
+
+<div class="phone mobile light" id="phone">
+  <div class="status-bar"><span>9:41</span><span>📶 📡 🔋</span></div>
+  <div class="nav-bar">
+    <button style="background:transparent; border:none; padding:8px; cursor:pointer;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    </button>
+  </div>
+  <div class="content">
+
+    <!-- default -->
+    <section class="variant active" data-state="default">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 8px 0 8px; text-align: center;">邀请配偶加入</h1>
+      <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 4px; text-align: center;">把这个 6 位码告诉你的配偶</p>
+      <p style="font-size: 13px; color: var(--color-text-tertiary); margin: 0; text-align: center;">他/她打开 app 输入就能加入</p>
+
+      <div class="code-grid" style="animation: fadeIn 0.4s ease-out 0.1s both;">
+        <div class="code-cell">4</div><div class="code-cell">8</div><div class="code-cell">2</div><div class="code-cell">9</div><div class="code-cell">1</div><div class="code-cell">7</div>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 32px;">
+        <div style="display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); font-size: 13px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>09:42 后过期</span>
+        </div>
+        <span style="color: var(--color-border);">|</span>
+        <span class="chip" id="copyBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>复制码</span>
+        </span>
+      </div>
+
+      <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 16px; display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
+        <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-border); display: flex; align-items: center; justify-content: center;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0; flex: 1;">配偶加入后,这里会自动显示对方设备名</p>
+      </div>
+
+      <div style="flex: 1;"></div>
+      <button class="btn btn-ghost" style="width: 100%; margin-bottom: 8px;">我稍后邀请</button>
+    </section>
+
+    <!-- countdown-low -->
+    <section class="variant" data-state="countdown-low">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 8px 0 8px; text-align: center;">邀请配偶加入</h1>
+      <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 4px; text-align: center;">把这个 6 位码告诉你的配偶</p>
+      <p style="font-size: 13px; color: var(--color-text-tertiary); margin: 0; text-align: center;">他/她打开 app 输入就能加入</p>
+      <div class="code-grid">
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">4</div>
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">8</div>
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">2</div>
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">9</div>
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">1</div>
+        <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">7</div>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 32px;">
+        <div style="display: flex; align-items: center; gap: 6px; color: var(--color-warning); font-size: 13px; font-weight: 500;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span>00:42 后过期</span>
+        </div>
+        <span style="color: var(--color-border);">|</span>
+        <span class="chip"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制码</span></span>
+      </div>
+      <div style="background: var(--color-warning-bg); border: 1px solid #F0E0B0; border-radius: var(--radius-lg); padding: 12px 16px; display: flex; align-items: center; gap: 10px; margin-bottom: 24px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <p style="font-size: 13px; color: var(--color-warning-text); margin: 0;">邀请码即将过期,请尽快完成配对</p>
+      </div>
+      <div style="flex: 1;"></div>
+      <button class="btn btn-ghost" style="width: 100%; margin-bottom: 8px;">我稍后邀请</button>
+    </section>
+
+    <!-- expired -->
+    <section class="variant" data-state="expired">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 8px 0 8px; text-align: center;">邀请码已过期</h1>
+      <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 32px; text-align: center;">点击下方按钮重新生成一个邀请码</p>
+      <div class="code-grid" style="opacity: 0.3; filter: grayscale(0.5);">
+        <div class="code-cell">4</div><div class="code-cell">8</div><div class="code-cell">2</div><div class="code-cell">9</div><div class="code-cell">1</div><div class="code-cell">7</div>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 32px; color: var(--color-text-tertiary); font-size: 13px;">
+        <span>已过期</span>
+      </div>
+      <div style="flex: 1;"></div>
+      <button class="btn btn-primary" style="margin-bottom: 12px;">重新生成</button>
+      <button class="btn btn-ghost" style="width: 100%;">我稍后邀请</button>
+    </section>
+
+    <!-- spouse-joined -->
+    <section class="variant" data-state="spouse-joined" style="justify-content: center; align-items: center; text-align: center;">
+      <div style="width: 80px; height: 80px; margin: 0 auto 24px; background: var(--color-success-bg); border-radius: 50%; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.4s;">
+        <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <h2 style="font-size: 24px; font-weight: 600; margin: 0 0 12px;">配偶已加入 ✨</h2>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px;">
+        <div style="width: 40px; height: 40px; background: var(--color-identity-b); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 500;">配</div>
+        <span style="font-size: 17px; font-weight: 500;">小李</span>
+      </div>
+      <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 32px;">正在为你跳转到主页...</p>
+      <div style="width: 24px; height: 24px; border: 2px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto;"></div>
+      <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+    </section>
+
+    <!-- copy-success (default + toast) -->
+    <section class="variant" data-state="copy-success">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 8px 0 8px; text-align: center;">邀请配偶加入</h1>
+      <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 4px; text-align: center;">把这个 6 位码告诉你的配偶</p>
+      <p style="font-size: 13px; color: var(--color-text-tertiary); margin: 0; text-align: center;">他/她打开 app 输入就能加入</p>
+      <div class="code-grid">
+        <div class="code-cell">4</div><div class="code-cell">8</div><div class="code-cell">2</div><div class="code-cell">9</div><div class="code-cell">1</div><div class="code-cell">7</div>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 32px;">
+        <div style="display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); font-size: 13px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>09:42 后过期</span>
+        </div>
+        <span style="color: var(--color-border);">|</span>
+        <span class="chip" style="background: var(--color-success-bg); color: var(--color-success-text); border-color: var(--color-success);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+          <span>已复制</span>
+        </span>
+      </div>
+      <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 16px; display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
+        <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-border); display: flex; align-items: center; justify-content: center;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0; flex: 1;">配偶加入后,这里会自动显示对方设备名</p>
+      </div>
+      <div style="flex: 1;"></div>
+      <button class="btn btn-ghost" style="width: 100%; margin-bottom: 8px;">我稍后邀请</button>
+      <div class="toast">已复制到剪贴板</div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+const phone = document.getElementById('phone');
+document.querySelectorAll('.state-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+  document.querySelector(`.variant[data-state="${btn.dataset.state}"]`).classList.add('active');
+}));
+document.querySelectorAll('.vp-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.vp-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('mobile', 'tablet', 'desktop');
+  phone.classList.add(btn.dataset.vp);
+}));
+document.querySelectorAll('.theme-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('light', 'dark');
+  phone.classList.add(btn.dataset.theme);
+}));
+</script>
+</body>
+</html>

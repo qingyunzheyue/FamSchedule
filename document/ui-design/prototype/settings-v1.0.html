@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings 设置 · FamSchedule 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-surface-variant: #F0E5D0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-success: #5C9D7E;
+  --color-success-bg: #E8F0EA;
+  --color-success-text: #2E5945;
+  --color-warning: #E0A341;
+  --color-warning-bg: #FBF1DC;
+  --color-warning-text: #7A5615;
+  --color-error: #C95444;
+  --color-error-bg: #FBEAE7;
+  --color-error-text: #7A2E25;
+  --radius-md: 10px; --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #E5DCC5; color: var(--color-text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #fff; padding: 12px 20px; border-radius: var(--radius-lg); box-shadow: var(--shadow-1); margin-bottom: 20px; max-width: 1320px; width: 100%; }
+.toolbar h1 { font-size: 15px; font-weight: 600; margin: 0 12px 0 0; }
+.toolbar .group { display: flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 12px; color: var(--color-text-secondary); margin-right: 4px; }
+.toolbar button { padding: 6px 12px; font-size: 12px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.toolbar button:hover { background: var(--color-background); }
+.toolbar button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.phone { background: var(--color-background); border-radius: 32px; box-shadow: 0 24px 48px -12px rgba(58,46,32,0.25); overflow: hidden; position: relative; transition: width 0.3s, height 0.3s; width: 375px; height: 812px; display: flex; flex-direction: column; }
+.phone.mobile { width: 375px; height: 812px; }
+.phone.tablet { width: 768px; height: 1024px; }
+.phone.desktop { width: 1280px; height: 800px; }
+.phone.dark { --color-background: #1A1814; --color-surface: #25221D; --color-surface-variant: #2F2A23; --color-text-primary: #F4ECDC; --color-text-secondary: #A89B86; --color-text-tertiary: #6E6452; --color-border: #3A332B; }
+.status-bar { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; font-size: 12px; font-weight: 600; color: var(--color-text-primary); flex-shrink: 0; }
+.nav-bar { height: 48px; display: flex; align-items: center; padding: 0 8px; flex-shrink: 0; }
+.nav-title { font-size: 17px; font-weight: 500; flex: 1; text-align: center; }
+.scroll { flex: 1; overflow-y: auto; padding: 0 0 88px; }
+.variant { display: none; }
+.variant.active { display: block; }
+.settings-group { margin-top: 16px; }
+.settings-group:first-child { margin-top: 8px; }
+.group-label { font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px; font-weight: 500; }
+.group-card { background: var(--color-surface); border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.row { display: flex; align-items: center; padding: 14px 16px; min-height: 56px; cursor: pointer; transition: background 0.15s; }
+.row:hover { background: var(--color-background); }
+.row + .row { border-top: 1px solid var(--color-border); }
+.row .label { font-size: 15px; flex: 1; }
+.row .value { font-size: 14px; color: var(--color-text-secondary); margin-right: 8px; }
+.chip-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px; }
+.chip { padding: 10px 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; font-size: 14px; color: var(--color-text-primary); cursor: pointer; }
+.chip.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.radio-group { padding: 8px 0; }
+.radio-row { display: flex; align-items: center; padding: 12px 16px; gap: 12px; cursor: pointer; }
+.radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--color-border); position: relative; flex-shrink: 0; }
+.radio.checked { border-color: var(--color-primary); }
+.radio.checked::after { content: ""; position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--color-primary); }
+.bottom-tab { position: absolute; bottom: 0; left: 0; right: 0; height: 64px; background: var(--color-surface); border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-around; padding-bottom: 8px; }
+.bottom-tab .tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; color: var(--color-text-tertiary); font-size: 11px; cursor: pointer; position: relative; }
+.bottom-tab .tab.active { color: var(--color-primary); }
+.bottom-tab .tab.active::before { content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary); }
+.status-card { margin: 8px 16px 16px; padding: 16px; border-radius: 12px; display: flex; align-items: center; gap: 12px; }
+.status-card.ok { background: var(--color-success-bg); color: var(--color-success-text); border: 1px solid #C5DCC9; }
+.status-card.warn { background: var(--color-warning-bg); color: var(--color-warning-text); border: 1px solid #F0E0B0; }
+.qr-box { width: 160px; height: 160px; background: var(--color-surface); border-radius: 8px; margin: 16px auto; display: flex; align-items: center; justify-content: center; }
+.btn-primary { padding: 14px 24px; font-size: 15px; font-weight: 500; background: var(--color-primary); color: #fff; border: none; border-radius: 10px; cursor: pointer; width: 100%; }
+.btn-ghost { padding: 14px 24px; font-size: 15px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 10px; cursor: pointer; width: 100%; }
+.input { width: 100%; padding: 12px 14px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; font-size: 15px; color: var(--color-text-primary); font-family: inherit; outline: none; }
+.textarea { width: 100%; padding: 12px 14px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; font-size: 15px; color: var(--color-text-primary); font-family: inherit; outline: none; min-height: 100px; resize: none; }
+.preview-card { margin: 16px; padding: 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>📱 Settings · 设置</h1>
+  <div class="group">
+    <label>页面:</label>
+    <button class="state-btn active" data-state="main">主页</button>
+    <button class="state-btn" data-state="notif">推送时间</button>
+    <button class="state-btn" data-state="rules">任务规则</button>
+    <button class="state-btn" data-state="whitelist">白名单</button>
+    <button class="state-btn" data-state="theme">主题</button>
+    <button class="state-btn" data-state="about">关于</button>
+    <button class="state-btn" data-state="feedback">反馈</button>
+  </div>
+  <div class="group">
+    <label>视口:</label>
+    <button class="vp-btn active" data-vp="mobile">📱 375</button>
+    <button class="vp-btn" data-vp="tablet">📱 768</button>
+    <button class="vp-btn" data-vp="desktop">🖥 1280</button>
+  </div>
+  <div class="group">
+    <label>主题:</label>
+    <button class="theme-btn active" data-theme="light">☀ 亮</button>
+    <button class="theme-btn" data-theme="dark">🌙 暗</button>
+  </div>
+</div>
+
+<div class="phone mobile light" id="phone">
+  <div class="status-bar"><span>9:41</span><span>📶 📡 🔋</span></div>
+  <div class="nav-bar" id="navBar">
+    <span style="width: 32px;"></span>
+    <span class="nav-title" id="navTitle">设置</span>
+    <span style="width: 32px;"></span>
+  </div>
+  <div class="scroll">
+
+    <!-- main -->
+    <section class="variant active" data-state="main">
+      <div class="settings-group">
+        <p class="group-label">推送通知</p>
+        <div class="group-card">
+          <div class="row"><div class="label">早汇总时间</div><div class="value">08:00</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">晚汇总时间</div><div class="value">20:00</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">通知权限</div><div class="value" style="color: var(--color-success);">开启</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">任务规则</p>
+        <div class="group-card">
+          <div class="row"><div class="label">过期提示窗口</div><div class="value">今+昨</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">补卡截止时间</div><div class="value">当天 23:59</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">后台推送优化</p>
+        <div class="group-card">
+          <div class="row"><div class="label">白名单状态</div><div class="value" style="color: var(--color-success);">✓ 已加入</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row" style="color: var(--color-primary);"><div class="label">重新检测</div></div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">显示</p>
+        <div class="group-card">
+          <div class="row"><div class="label">主题</div><div class="value">跟随系统</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">关于</p>
+        <div class="group-card">
+          <div class="row"><div class="label">版本号</div><div class="value">1.0.0 (1)</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">意见反馈</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">隐私说明</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">联系开发者</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- notif -->
+    <section class="variant" data-state="notif">
+      <div class="settings-group">
+        <p class="group-label">早汇总时间</p>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px;">选择每天早上几点发送今日任务概览</p>
+        <div class="chip-grid">
+          <span class="chip">06:00</span><span class="chip">06:30</span><span class="chip">07:00</span><span class="chip">07:30</span>
+          <span class="chip active">08:00</span><span class="chip">08:30</span><span class="chip">09:00</span><span class="chip">09:30</span>
+          <span class="chip">10:00</span><span class="chip">10:30</span><span class="chip">11:00</span><span class="chip">11:30</span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">晚汇总时间</p>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px;">选择每天晚上几点发送未完成提醒</p>
+        <div class="chip-grid">
+          <span class="chip">18:00</span><span class="chip">18:30</span><span class="chip">19:00</span><span class="chip">19:30</span>
+          <span class="chip active">20:00</span><span class="chip">20:30</span><span class="chip">21:00</span><span class="chip">21:30</span>
+          <span class="chip">22:00</span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">系统通知权限</p>
+        <div class="group-card">
+          <div class="row"><div class="label">系统通知权限</div><div class="value" style="color: var(--color-success);">开启</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- rules -->
+    <section class="variant" data-state="rules">
+      <div class="settings-group">
+        <p class="group-label">过期提示窗口</p>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px;">App 启动时,提醒多久内的过期任务</p>
+        <div class="group-card">
+          <div class="radio-group">
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">今+昨(默认)</span></div>
+            <div class="radio-row"><div class="radio checked"></div><span style="font-size: 15px;">本周(周一~今)</span></div>
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">全部</span></div>
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">关闭</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">补卡截止时间</p>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px;">漏打卡后多久内可以补卡</p>
+        <div class="group-card">
+          <div class="radio-group">
+            <div class="radio-row"><div class="radio checked"></div><span style="font-size: 15px;">当天 23:59(默认)</span></div>
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">次日中午 12:00</span></div>
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">关闭补卡</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- whitelist -->
+    <section class="variant" data-state="whitelist">
+      <div class="status-card ok">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <div style="flex: 1;">
+          <p style="font-size: 15px; font-weight: 500; margin: 0;">✓ 已加入白名单</p>
+          <p style="font-size: 12px; margin: 2px 0 0; opacity: 0.8;">您的设备已允许 FamSchedule 在后台运行,推送将可靠到达</p>
+        </div>
+      </div>
+      <div style="padding: 0 16px 16px;">
+        <button class="btn-ghost">重新检测</button>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">为什么需要加入白名单?</p>
+        <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 16px 12px; line-height: 1.6;">国内部分 Android 厂商(如小米、华为、OPPO、vivo、三星)会默认限制应用在后台的运行,这可能导致 FamSchedule 的任务提醒无法准时到达。</p>
+        <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 16px; line-height: 1.6;">加入白名单后,系统允许 App 在后台继续运行,推送通知能可靠触达。</p>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">各厂商设置路径</p>
+        <div class="group-card">
+          <div class="row" style="display: block;">
+            <p style="font-size: 14px; font-weight: 500; margin: 0 0 4px;">小米</p>
+            <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0; font-family: monospace;">设置 → 应用管理 → FamSchedule → 自启动 → 开启</p>
+          </div>
+          <div class="row" style="display: block;">
+            <p style="font-size: 14px; font-weight: 500; margin: 0 0 4px;">华为</p>
+            <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0; font-family: monospace;">设置 → 电池 → 启动管理 → FamSchedule → 允许后台活动</p>
+          </div>
+          <div class="row" style="display: block;">
+            <p style="font-size: 14px; font-weight: 500; margin: 0 0 4px;">OPPO</p>
+            <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0; font-family: monospace;">设置 → 电池 → 关闭"冻结后台不活跃应用"</p>
+          </div>
+          <div class="row" style="display: block;">
+            <p style="font-size: 14px; font-weight: 500; margin: 0 0 4px;">vivo</p>
+            <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0; font-family: monospace;">设置 → 电池 → 后台高耗电 → 允许 FamSchedule</p>
+          </div>
+          <div class="row" style="display: block;">
+            <p style="font-size: 14px; font-weight: 500; margin: 0 0 4px;">三星</p>
+            <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0; font-family: monospace;">设置 → 应用程序 → FamSchedule → 电池 → 不优化</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- theme -->
+    <section class="variant" data-state="theme">
+      <div class="settings-group">
+        <p class="group-label">选择 App 外观</p>
+        <div class="group-card">
+          <div class="radio-group">
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">☀ 浅色</span></div>
+            <div class="radio-row"><div class="radio"></div><span style="font-size: 15px;">🌙 深色</span></div>
+            <div class="radio-row"><div class="radio checked"></div><span style="font-size: 15px;">🌓 跟随系统(默认)</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">预览</p>
+        <div class="preview-card">
+          <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 8px;">任务卡样式</p>
+          <div style="background: var(--color-background); padding: 12px; border-radius: 10px; border: 1px solid var(--color-border);">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px;">我</div>
+              <div style="flex: 1; font-size: 14px; font-weight: 500;">喂奶粉</div>
+              <div style="width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--color-border);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- about -->
+    <section class="variant" data-state="about">
+      <div class="preview-card" style="text-align: center; margin-top: 16px;">
+        <div style="width: 64px; height: 64px; background: var(--color-primary); border-radius: 16px; margin: 0 auto 12px; display: flex; align-items: center; justify-content: center;">
+          <svg width="36" height="36" viewBox="0 0 64 64" fill="none"><path d="M32 12 L48 26 L48 50 L36 50 L36 38 L28 38 L28 50 L16 50 L16 26 Z" fill="#FFF9F0"/></svg>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 600; margin: 0 0 4px;">FamSchedule</h2>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0;">家里的小日程</p>
+      </div>
+      <div class="settings-group">
+        <div class="group-card">
+          <div class="row"><div class="label">版本</div><div class="value">1.0.0 (build 1)</div></div>
+          <div class="row"><div class="label">设备</div><div class="value">Mi 12 · Android 13</div></div>
+        </div>
+      </div>
+      <div class="settings-group">
+        <div class="group-card">
+          <div class="row"><div class="label">意见反馈</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">隐私说明</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+          <div class="row"><div class="label">联系开发者</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+        </div>
+      </div>
+      <p style="font-size: 11px; color: var(--color-text-tertiary); text-align: center; margin: 24px 0;">© 2026 FamSchedule<br>仅供家庭内部使用</p>
+    </section>
+
+    <!-- feedback -->
+    <section class="variant" data-state="feedback">
+      <div class="settings-group">
+        <p class="group-label">反馈类型</p>
+        <div class="chip-grid">
+          <span class="chip active">功能建议</span>
+          <span class="chip">Bug 报告</span>
+          <span class="chip">体验问题</span>
+          <span class="chip">其他</span>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">描述(200 字内)</p>
+        <div style="padding: 0 16px;">
+          <textarea class="textarea" placeholder="说说你遇到的问题或建议..."></textarea>
+          <p style="font-size: 12px; color: var(--color-text-tertiary); text-align: right; margin: 4px 0 0;">0 / 200</p>
+        </div>
+      </div>
+      <div class="settings-group">
+        <p class="group-label">联系方式(可选)</p>
+        <div style="padding: 0 16px;">
+          <input class="input" type="text" placeholder="邮箱或微信号,便于我们回复你">
+        </div>
+      </div>
+      <div style="padding: 24px 16px;">
+        <button class="btn-primary">提交反馈</button>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="bottom-tab" id="bottomTab">
+    <div class="tab">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h2v14H3zm4 0h2v14H7zm4 0h2v14h-2zm4 0h2v14h-2zm4 0h2v14h-2z"/></svg>
+      任务
+    </div>
+    <div class="tab">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      家庭
+    </div>
+    <div class="tab active">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      设置
+    </div>
+  </div>
+</div>
+
+<script>
+const phone = document.getElementById('phone');
+const navTitle = document.getElementById('navTitle');
+const navBar = document.getElementById('navBar');
+const bottomTab = document.getElementById('bottomTab');
+
+const titles = {
+  main: '设置',
+  notif: '推送时间',
+  rules: '任务规则',
+  whitelist: '后台推送优化',
+  theme: '主题',
+  about: '关于',
+  feedback: '意见反馈'
+};
+
+function updateNav(state) {
+  if (state === 'main') {
+    navBar.innerHTML = '<span style="width: 32px;"></span><span class="nav-title">设置</span><span style="width: 32px;"></span>';
+    bottomTab.style.display = 'flex';
+  } else {
+    navBar.innerHTML = '<button style="background:transparent; border:none; padding:8px; cursor:pointer;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-primary)" stroke-width="2" stroke-linecap="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></button><span class="nav-title">' + titles[state] + '</span><span style="width: 32px;"></span>';
+    bottomTab.style.display = 'none';
+  }
+}
+
+document.querySelectorAll('.state-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+  document.querySelector(`.variant[data-state="${btn.dataset.state}"]`).classList.add('active');
+  updateNav(btn.dataset.state);
+}));
+document.querySelectorAll('.vp-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.vp-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('mobile', 'tablet', 'desktop');
+  phone.classList.add(btn.dataset.vp);
+}));
+document.querySelectorAll('.theme-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('light', 'dark');
+  phone.classList.add(btn.dataset.theme);
+}));
+</script>
+</body>
+</html>

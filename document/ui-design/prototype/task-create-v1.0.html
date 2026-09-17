@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Create 创建任务 · FamSchedule 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-surface-variant: #F0E5D0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-identity-b-bg: #E1E8ED;
+  --color-identity-a-bg: #FBE8DD;
+  --color-success: #5C9D7E;
+  --color-warning: #E0A341;
+  --color-warning-bg: #FBF1DC;
+  --color-warning-text: #7A5615;
+  --color-error: #C95444;
+  --color-error-bg: #FBEAE7;
+  --color-error-text: #7A2E25;
+  --radius-md: 10px; --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #E5DCC5; color: var(--color-text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #fff; padding: 12px 20px; border-radius: var(--radius-lg); box-shadow: var(--shadow-1); margin-bottom: 20px; max-width: 1320px; width: 100%; }
+.toolbar h1 { font-size: 15px; font-weight: 600; margin: 0 12px 0 0; }
+.toolbar .group { display: flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 12px; color: var(--color-text-secondary); margin-right: 4px; }
+.toolbar button { padding: 6px 12px; font-size: 12px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.toolbar button:hover { background: var(--color-background); }
+.toolbar button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.phone { background: var(--color-background); border-radius: 32px; box-shadow: 0 24px 48px -12px rgba(58,46,32,0.25); overflow: hidden; position: relative; transition: width 0.3s, height 0.3s; width: 375px; height: 812px; display: flex; flex-direction: column; }
+.phone.mobile { width: 375px; height: 812px; }
+.phone.tablet { width: 768px; height: 1024px; }
+.phone.desktop { width: 1280px; height: 800px; }
+.phone.dark { --color-background: #1A1814; --color-surface: #25221D; --color-surface-variant: #2F2A23; --color-text-primary: #F4ECDC; --color-text-secondary: #A89B86; --color-text-tertiary: #6E6452; --color-border: #3A332B; --color-identity-b-bg: #1F2A33; --color-identity-a-bg: #3A2218; }
+.status-bar { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; font-size: 12px; font-weight: 600; color: var(--color-text-primary); flex-shrink: 0; }
+.nav-bar { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; flex-shrink: 0; }
+.nav-title { font-size: 17px; font-weight: 500; flex: 1; text-align: center; }
+.scroll { flex: 1; overflow-y: auto; padding: 0 16px 32px; }
+.variant { display: none; }
+.variant.active { display: block; }
+.field { margin-bottom: 20px; }
+.field-label { font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px; font-weight: 500; }
+.field-label .req { color: var(--color-primary); margin-left: 2px; }
+.input, .textarea, .select { width: 100%; padding: 12px 14px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; font-size: 15px; color: var(--color-text-primary); font-family: inherit; outline: none; transition: all 0.15s; }
+.input.error, .textarea.error { border-color: var(--color-error); }
+.input:focus, .textarea:focus, .select:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(220,90,36,0.15); }
+.textarea { min-height: 80px; resize: none; }
+.field-row { display: flex; align-items: center; padding: 14px 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; }
+.field-row .label { font-size: 15px; color: var(--color-text-primary); flex: 1; display: flex; align-items: center; gap: 8px; }
+.field-row .value { font-size: 14px; color: var(--color-text-secondary); }
+.chip-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { padding: 8px 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; font-size: 14px; color: var(--color-text-primary); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; }
+.chip.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.chip.b { background: var(--color-identity-b); color: #fff; border-color: var(--color-identity-b); }
+.btn-primary { padding: 14px 24px; font-size: 15px; font-weight: 500; background: var(--color-primary); color: #fff; border: none; border-radius: 10px; cursor: pointer; }
+.btn-ghost { background: transparent; color: var(--color-text-secondary); border: none; padding: 8px 12px; cursor: pointer; font-size: 15px; }
+.btn-error-text { background: transparent; color: var(--color-error); border: none; padding: 8px 12px; cursor: pointer; font-size: 15px; }
+.template-warning { background: var(--color-warning-bg); border: 1px solid #F0E0B0; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--color-warning-text); }
+.error-msg { color: var(--color-error); font-size: 13px; margin: 4px 0 0; }
+.avatar { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; font-weight: 500; }
+.avatar.a { background: var(--color-primary); }
+.avatar.b { background: var(--color-identity-b); }
+.weekday-chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+.weekday-chip { width: 36px; height: 36px; border-radius: 50%; background: var(--color-surface); border: 1px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer; }
+.weekday-chip.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>📱 Task Create · 创建任务</h1>
+  <div class="group">
+    <label>状态:</label>
+    <button class="state-btn active" data-state="default">default</button>
+    <button class="state-btn" data-state="empty">空标题</button>
+    <button class="state-btn" data-state="recurrence">周期展开</button>
+    <button class="state-btn" data-state="editing">编辑模板</button>
+    <button class="state-btn" data-state="saving">saving</button>
+    <button class="state-btn" data-state="date-picker-open">📅 日期时间选择</button>
+  </div>
+  <div class="group">
+    <label>视口:</label>
+    <button class="vp-btn active" data-vp="mobile">📱 375</button>
+    <button class="vp-btn" data-vp="tablet">📱 768</button>
+    <button class="vp-btn" data-vp="desktop">🖥 1280</button>
+  </div>
+  <div class="group">
+    <label>主题:</label>
+    <button class="theme-btn active" data-theme="light">☀ 亮</button>
+    <button class="theme-btn" data-theme="dark">🌙 暗</button>
+  </div>
+</div>
+
+<div class="phone mobile light" id="phone">
+  <div class="status-bar"><span>9:41</span><span>📶 📡 🔋</span></div>
+  <div class="nav-bar">
+    <button class="btn-ghost">取消</button>
+    <span class="nav-title">新建任务</span>
+    <button class="btn-ghost" style="color: var(--color-primary); font-weight: 500;">保存</button>
+  </div>
+  <div class="scroll">
+
+    <!-- default -->
+    <section class="variant active" data-state="default">
+      <div class="field">
+        <p class="field-label">任务标题<span class="req">*</span></p>
+        <input class="input" type="text" value="喂奶粉" placeholder="给任务起个名字">
+      </div>
+      <div class="field">
+        <p class="field-label">日期<span class="req">*</span></p>
+        <div class="field-row">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            今天 · 9 月 10 日 周三
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">时间</p>
+        <div class="field-row">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            10:00
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">指派人<span class="req">*</span></p>
+        <div class="chip-group">
+          <span class="chip active"><span class="avatar a">我</span> 我</span>
+          <span class="chip"><span class="avatar b">配</span> 配偶</span>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">共同执行人</p>
+        <div class="field-row" style="border-style: dashed; background: transparent;">
+          <div class="label" style="color: var(--color-text-secondary);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            添加共同执行人
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">周期</p>
+        <div class="field-row">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            不重复
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">备注</p>
+        <textarea class="textarea" placeholder="给任务加点提醒...">7 勺奶粉,150ml 温水</textarea>
+      </div>
+      <div class="field">
+        <p class="field-label">共享</p>
+        <div class="field-row">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            🔒 私有(仅我可见)
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- empty (validation error) -->
+    <section class="variant" data-state="empty">
+      <div class="field">
+        <p class="field-label">任务标题<span class="req">*</span></p>
+        <input class="input error" type="text" placeholder="给任务起个名字">
+        <p class="error-msg">标题不能为空</p>
+      </div>
+      <div class="field">
+        <p class="field-label">日期<span class="req">*</span></p>
+        <div class="field-row">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            今天 · 9 月 10 日 周三
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">指派人<span class="req">*</span></p>
+        <div class="chip-group">
+          <span class="chip active"><span class="avatar a">我</span> 我</span>
+          <span class="chip"><span class="avatar b">配</span> 配偶</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- recurrence expanded -->
+    <section class="variant" data-state="recurrence">
+      <div class="field">
+        <p class="field-label">任务标题<span class="req">*</span></p>
+        <input class="input" type="text" value="吃早餐">
+      </div>
+      <div class="field">
+        <p class="field-label">日期<span class="req">*</span></p>
+        <div class="field-row"><div class="label">每天</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">时间</p>
+        <div class="field-row"><div class="label">08:00</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">周期</p>
+        <div class="field-row" style="background: var(--color-identity-a-bg); border-color: var(--color-primary);">
+          <div class="label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            <strong>每日</strong>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+        </div>
+        <div style="margin-top: 12px; padding: 12px; background: var(--color-surface); border-radius: 10px;">
+          <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px;">周期结束时间(可选)</p>
+          <div class="field-row" style="padding: 10px 12px;"><div class="label" style="font-size: 14px; color: var(--color-text-tertiary);">不填则长期有效</div></div>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">指派人<span class="req">*</span></p>
+        <div class="chip-group">
+          <span class="chip active"><span class="avatar a">我</span> 我</span>
+          <span class="chip"><span class="avatar b">配</span> 配偶</span>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">备注</p>
+        <textarea class="textarea" placeholder="..."></textarea>
+      </div>
+    </section>
+
+    <!-- editing (template) -->
+    <section class="variant" data-state="editing">
+      <div class="template-warning">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2.5"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>修改会同步到所有未来的重复实例。本次修改不影响已完成的实例。</span>
+      </div>
+      <div class="field">
+        <p class="field-label">任务标题<span class="req">*</span></p>
+        <input class="input" type="text" value="吃早餐">
+      </div>
+      <div class="field">
+        <p class="field-label">时间</p>
+        <div class="field-row"><div class="label">08:00</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">指派人<span class="req">*</span></p>
+        <div class="chip-group">
+          <span class="chip active"><span class="avatar a">我</span> 我</span>
+          <span class="chip"><span class="avatar b">配</span> 配偶</span>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">周期</p>
+        <div class="field-row"><div class="label">每日</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">备注</p>
+        <textarea class="textarea">记得吃维生素 D</textarea>
+      </div>
+      <button class="btn-error-text" style="margin-top: 16px; display: flex; align-items: center; gap: 6px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        删除任务
+      </button>
+    </section>
+
+    <!-- saving -->
+    <section class="variant" data-state="saving">
+      <div class="field">
+        <p class="field-label">任务标题<span class="req">*</span></p>
+        <input class="input" type="text" value="提醒吃药" disabled style="opacity: 0.6;">
+      </div>
+      <div class="field">
+        <p class="field-label">日期<span class="req">*</span></p>
+        <div class="field-row"><div class="label">今天 · 9 月 10 日 周三</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">时间</p>
+        <div class="field-row"><div class="label">20:00</div></div>
+      </div>
+      <div class="field">
+        <p class="field-label">指派人<span class="req">*</span></p>
+        <div class="chip-group">
+          <span class="chip active"><span class="avatar a">我</span> 我</span>
+          <span class="chip"><span class="avatar b">配</span> 配偶</span>
+        </div>
+      </div>
+      <div class="field">
+        <p class="field-label">备注</p>
+        <textarea class="textarea" disabled style="opacity: 0.6;">降压药 + 维生素</textarea>
+      </div>
+    </section>
+
+  </div>
+  <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 12px 16px; background: var(--color-background); border-top: 1px solid var(--color-border); display: flex; justify-content: center;">
+    <button class="btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;" id="saveBtn">
+      <span>保存</span>
+    </button>
+  </div>
+  <div class="variant" data-state="saving" style="position: absolute; bottom: 0; left: 0; right: 0; padding: 12px 16px; background: var(--color-background); border-top: 1px solid var(--color-border); display: flex; justify-content: center;">
+    <button class="btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;" disabled>
+      <div style="width: 16px; height: 16px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+      <span>保存中...</span>
+    </button>
+  </div>
+  <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+  <!-- Date Picker Bottom Sheet Overlay -->
+  <section class="variant" data-state="date-picker-open" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(58,46,32,0.45); display: flex; flex-direction: column; justify-content: flex-end; z-index: 50; animation: fadeIn 0.2s ease-out;">
+    <div style="background: var(--color-background); border-radius: 20px 20px 0 0; padding: 12px 20px 24px; max-height: 88%; overflow-y: auto; animation: slideUpSheet 0.3s ease-out;">
+      <!-- Drag handle -->
+      <div style="width: 40px; height: 4px; background: var(--color-border); border-radius: 2px; margin: 0 auto 16px;"></div>
+
+      <!-- Title -->
+      <h2 style="font-size: 20px; font-weight: 600; margin: 0 0 4px;">选择日期和时间</h2>
+      <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 16px;" data-time-summary>2026 年 9 月 15 日 周二 · 10:00</p>
+
+      <!-- Quick presets -->
+      <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+        <span class="chip" style="background: var(--color-surface); flex: 1; justify-content: center; padding: 10px 12px;">今天</span>
+        <span class="chip" style="background: var(--color-surface); flex: 1; justify-content: center; padding: 10px 12px;">明天</span>
+        <span class="chip" style="background: var(--color-surface); flex: 1; justify-content: center; padding: 10px 12px;">下周</span>
+        <span class="chip" style="background: var(--color-surface); flex: 1; justify-content: center; padding: 10px 12px;">选周末</span>
+      </div>
+
+      <!-- Calendar header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 4px;">
+        <button style="width: 32px; height: 32px; background: transparent; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--color-text-primary);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span style="font-size: 17px; font-weight: 500;">2026 年 9 月</span>
+        <button style="width: 32px; height: 32px; background: transparent; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--color-text-primary);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+
+      <!-- Weekday labels -->
+      <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 8px;">
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">日</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">一</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">二</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">三</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">四</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">五</div>
+        <div style="text-align: center; font-size: 12px; color: var(--color-text-tertiary); padding: 4px 0; font-weight: 500;">六</div>
+      </div>
+
+      <!-- September 2026 calendar (Sep 1 = Tue) -->
+      <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;">
+        <!-- Row 1: blank, blank, 1, 2, 3, 4, 5 -->
+        <div style="aspect-ratio: 1;"></div>
+        <div style="aspect-ratio: 1;"></div>
+        <div class="cal-day">1</div>
+        <div class="cal-day">2</div>
+        <div class="cal-day">3</div>
+        <div class="cal-day">4</div>
+        <div class="cal-day">5</div>
+
+        <!-- Row 2: 6, 7, 8, 9, 10 (today), 11, 12 -->
+        <div class="cal-day weekend">6</div>
+        <div class="cal-day">7</div>
+        <div class="cal-day">8</div>
+        <div class="cal-day">9</div>
+        <div class="cal-day today">10<div class="today-dot"></div></div>
+        <div class="cal-day">11</div>
+        <div class="cal-day weekend">12</div>
+
+        <!-- Row 3: 13, 14, 15 (SELECTED), 16, 17, 18, 19 -->
+        <div class="cal-day weekend">13</div>
+        <div class="cal-day">14</div>
+        <div class="cal-day selected">15</div>
+        <div class="cal-day">16</div>
+        <div class="cal-day">17</div>
+        <div class="cal-day">18</div>
+        <div class="cal-day weekend">19</div>
+
+        <!-- Row 4: 20, 21, 22, 23, 24, 25, 26 -->
+        <div class="cal-day weekend">20</div>
+        <div class="cal-day">21</div>
+        <div class="cal-day">22</div>
+        <div class="cal-day">23</div>
+        <div class="cal-day">24</div>
+        <div class="cal-day">25</div>
+        <div class="cal-day weekend">26</div>
+
+        <!-- Row 5: 27, 28, 29, 30, blank, blank, blank -->
+        <div class="cal-day weekend">27</div>
+        <div class="cal-day">28</div>
+        <div class="cal-day">29</div>
+        <div class="cal-day">30</div>
+        <div style="aspect-ratio: 1;"></div>
+        <div style="aspect-ratio: 1;"></div>
+        <div style="aspect-ratio: 1;"></div>
+      </div>
+
+      <!-- Time picker · 数字输入 + 时段快捷 -->
+      <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-border);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0; font-weight: 500;">时间</p>
+          <span style="font-size: 11px; color: var(--color-text-tertiary); letter-spacing: 0.5px;">24h 制</span>
+        </div>
+
+        <!-- 大数字输入 HH : MM -->
+        <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 16px;">
+          <input class="time-input" type="tel" inputmode="numeric" maxlength="2" value="10" aria-label="小时" />
+          <span style="font-size: 36px; font-weight: 300; color: var(--color-text-tertiary); padding-bottom: 4px;">:</span>
+          <input class="time-input" type="tel" inputmode="numeric" maxlength="2" value="00" aria-label="分钟" />
+        </div>
+
+        <!-- 时段快捷 chips -->
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <span class="time-preset" data-h="09" data-m="00">上午 9:00</span>
+          <span class="time-preset" data-h="12" data-m="00">中午 12:00</span>
+          <span class="time-preset" data-h="15" data-m="00">下午 3:00</span>
+          <span class="time-preset" data-h="18" data-m="00">晚上 6:00</span>
+          <span class="time-preset" data-h="21" data-m="00">晚上 9:00</span>
+        </div>
+      </div>
+
+      <!-- "不再提醒" toggle -->
+      <div style="margin-top: 16px; padding: 14px 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+        <div style="flex: 1;">
+          <p style="font-size: 15px; font-weight: 500; margin: 0;">不再提醒</p>
+          <p style="font-size: 12px; color: var(--color-text-secondary); margin: 2px 0 0;">用于纯记录事项,不会发送推送</p>
+        </div>
+        <div style="width: 44px; height: 26px; background: var(--color-border); border-radius: 999px; position: relative; cursor: pointer; transition: background 0.2s;">
+          <div style="position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.2);"></div>
+        </div>
+      </div>
+
+      <!-- Buttons -->
+      <div style="display: flex; gap: 12px; margin-top: 20px;">
+        <button class="btn-ghost" style="flex: 1; padding: 14px 24px;">取消</button>
+        <button class="btn-primary" style="flex: 1; padding: 14px 24px;">确认</button>
+      </div>
+    </div>
+  </section>
+  <style>
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUpSheet { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .cal-day {
+      aspect-ratio: 1;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: var(--color-text-primary);
+      border-radius: 50%; cursor: pointer; position: relative;
+      transition: all 0.15s;
+    }
+    .cal-day:hover { background: var(--color-surface); }
+    .cal-day.weekend { color: var(--color-text-tertiary); }
+    .cal-day.today { font-weight: 600; }
+    .cal-day.today::after {
+      content: ""; position: absolute; top: 4px; right: 4px;
+      width: 5px; height: 5px; background: var(--color-primary); border-radius: 50%;
+    }
+    .cal-day.selected {
+      background: var(--color-primary) !important; color: #fff !important;
+      font-weight: 600; box-shadow: 0 4px 12px -2px rgba(220,90,36,0.4);
+    }
+    .time-input {
+      width: 72px; height: 64px;
+      background: var(--color-surface); border: 1.5px solid var(--color-border);
+      border-radius: 14px;
+      font-size: 36px; font-weight: 600; color: var(--color-primary);
+      font-family: inherit;
+      text-align: center; outline: none;
+      font-feature-settings: 'tnum' on;
+      transition: all 0.15s;
+      -moz-appearance: textfield;
+    }
+    .time-input::-webkit-outer-spin-button,
+    .time-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .time-input:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(220,90,36,0.15);
+      background: #fff;
+    }
+    .time-input:hover:not(:focus) { border-color: #D0C5B0; }
+    .time-preset {
+      padding: 7px 12px; font-size: 13px;
+      background: var(--color-surface); color: var(--color-text-primary);
+      border: 1px solid var(--color-border); border-radius: 999px;
+      cursor: pointer; transition: all 0.15s; user-select: none;
+    }
+    .time-preset:hover {
+      background: var(--color-identity-a-bg);
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+    .time-preset.active {
+      background: var(--color-primary); color: #fff;
+      border-color: var(--color-primary);
+    }
+  </style>
+</div>
+
+<script>
+const phone = document.getElementById('phone');
+document.querySelectorAll('.state-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll(`.variant[data-state="${btn.dataset.state}"]`).forEach(v => v.classList.add('active'));
+}));
+document.querySelectorAll('.vp-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.vp-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('mobile', 'tablet', 'desktop');
+  phone.classList.add(btn.dataset.vp);
+}));
+document.querySelectorAll('.theme-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('light', 'dark');
+  phone.classList.add(btn.dataset.theme);
+}));
+
+// Date picker time-preset chips + time input interactivity
+const summaryEl = document.querySelector('[data-time-summary]');
+const hourInput = document.querySelector('.time-input[aria-label="小时"]');
+const minuteInput = document.querySelector('.time-input[aria-label="分钟"]');
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function updateSummary() {
+  if (!summaryEl || !hourInput || !minuteInput) return;
+  const h = pad2(hourInput.value || '00');
+  const m = pad2(minuteInput.value || '00');
+  summaryEl.textContent = `2026 年 9 月 15 日 周二 · ${h}:${m}`;
+  // Deactivate any preset that doesn't match current value
+  document.querySelectorAll('.time-preset').forEach(p => {
+    p.classList.toggle('active', p.dataset.h === h && p.dataset.m === m);
+  });
+}
+
+document.querySelectorAll('.time-preset').forEach(chip => {
+  chip.addEventListener('click', () => {
+    if (hourInput) hourInput.value = chip.dataset.h;
+    if (minuteInput) minuteInput.value = chip.dataset.m;
+    updateSummary();
+  });
+});
+[hourInput, minuteInput].forEach(inp => {
+  if (!inp) return;
+  inp.addEventListener('input', () => {
+    // Strip non-digits and pad
+    let v = inp.value.replace(/\D/g, '');
+    if (v.length === 1) v = '0' + v;
+    inp.value = v;
+    updateSummary();
+  });
+  inp.addEventListener('focus', () => inp.select());
+});
+// Initial preset active state
+updateSummary();
+</script>
+</body>
+</html>

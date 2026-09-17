@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Family Dashboard 家庭 Tab · FamSchedule 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-surface-variant: #F0E5D0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-identity-b-bg: #E1E8ED;
+  --color-identity-a-bg: #FBE8DD;
+  --color-success: #5C9D7E;
+  --color-success-bg: #E8F0EA;
+  --color-success-text: #2E5945;
+  --color-warning: #E0A341;
+  --color-warning-bg: #FBF1DC;
+  --color-warning-text: #7A5615;
+  --color-error: #C95444;
+  --color-error-bg: #FBEAE7;
+  --color-error-text: #7A2E25;
+  --radius-md: 10px; --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #E5DCC5; color: var(--color-text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #fff; padding: 12px 20px; border-radius: var(--radius-lg); box-shadow: var(--shadow-1); margin-bottom: 20px; max-width: 1320px; width: 100%; }
+.toolbar h1 { font-size: 15px; font-weight: 600; margin: 0 12px 0 0; }
+.toolbar .group { display: flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 12px; color: var(--color-text-secondary); margin-right: 4px; }
+.toolbar button { padding: 6px 12px; font-size: 12px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.toolbar button:hover { background: var(--color-background); }
+.toolbar button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.phone { background: var(--color-background); border-radius: 32px; box-shadow: 0 24px 48px -12px rgba(58,46,32,0.25); overflow: hidden; position: relative; transition: width 0.3s, height 0.3s; width: 375px; height: 812px; display: flex; flex-direction: column; }
+.phone.mobile { width: 375px; height: 812px; }
+.phone.tablet { width: 768px; height: 1024px; }
+.phone.desktop { width: 1280px; height: 800px; }
+.phone.dark { --color-background: #1A1814; --color-surface: #25221D; --color-surface-variant: #2F2A23; --color-text-primary: #F4ECDC; --color-text-secondary: #A89B86; --color-text-tertiary: #6E6452; --color-border: #3A332B; --color-identity-b-bg: #1F2A33; --color-identity-a-bg: #3A2218; }
+.status-bar { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; font-size: 12px; font-weight: 600; color: var(--color-text-primary); flex-shrink: 0; }
+.scroll { flex: 1; overflow-y: auto; padding: 0 0 88px; }
+.variant { display: none; }
+.variant.active { display: block; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; color: #fff; font-weight: 500; flex-shrink: 0; }
+.avatar.sm { width: 20px; height: 20px; font-size: 10px; }
+.avatar.lg { width: 48px; height: 48px; font-size: 18px; }
+.avatar.a { background: var(--color-primary); }
+.avatar.b { background: var(--color-identity-b); }
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 20px; margin: 0 16px 16px; box-shadow: var(--shadow-1); }
+.card-row { display: flex; align-items: center; gap: 12px; }
+.btn { padding: 8px 16px; font-size: 14px; font-weight: 500; border: none; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.btn-outline { background: var(--color-surface); color: var(--color-primary); border: 1px solid var(--color-primary); }
+.btn-outline:hover { background: var(--color-identity-a-bg); }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; font-size: 13px; cursor: pointer; }
+.chip:hover { background: var(--color-background); }
+.code-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 12px 0; }
+.code-cell { aspect-ratio: 0.78; background: var(--color-surface-variant); border: 1px solid var(--color-border); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; color: var(--color-primary); font-feature-settings: 'tnum' on; }
+.divider { height: 1px; background: var(--color-border); margin: 16px 0; }
+.section-title { font-size: 13px; color: var(--color-text-secondary); margin: 0 16px 8px; font-weight: 500; }
+.progress-row { display: grid; grid-template-columns: 50px 1fr 60px; gap: 12px; align-items: center; margin-bottom: 8px; }
+.progress-track { height: 8px; background: var(--color-surface-variant); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+.progress-fill.a { background: var(--color-primary); }
+.progress-fill.b { background: var(--color-identity-b); }
+.shared-item { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+.shared-item .title { font-size: 15px; font-weight: 500; margin: 0 0 2px; }
+.shared-item .meta { font-size: 12px; color: var(--color-text-secondary); margin: 0; }
+.bottom-tab { position: absolute; bottom: 0; left: 0; right: 0; height: 64px; background: var(--color-surface); border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-around; padding-bottom: 8px; }
+.bottom-tab .tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px; color: var(--color-text-tertiary); font-size: 11px; cursor: pointer; position: relative; }
+.bottom-tab .tab.active { color: var(--color-primary); }
+.bottom-tab .tab.active::before { content: ""; position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>📱 Family Dashboard · 家庭 Tab</h1>
+  <div class="group">
+    <label>状态:</label>
+    <button class="state-btn active" data-state="default">default</button>
+    <button class="state-btn" data-state="no-invite">无配偶</button>
+    <button class="state-btn" data-state="invite-low">即将过期</button>
+    <button class="state-btn" data-state="expired">已过期</button>
+    <button class="state-btn" data-state="empty-shared">空共享</button>
+  </div>
+  <div class="group">
+    <label>视口:</label>
+    <button class="vp-btn active" data-vp="mobile">📱 375</button>
+    <button class="vp-btn" data-vp="tablet">📱 768</button>
+    <button class="vp-btn" data-vp="desktop">🖥 1280</button>
+  </div>
+  <div class="group">
+    <label>主题:</label>
+    <button class="theme-btn active" data-theme="light">☀ 亮</button>
+    <button class="theme-btn" data-theme="dark">🌙 暗</button>
+  </div>
+</div>
+
+<div class="phone mobile light" id="phone">
+  <div class="status-bar"><span>9:41</span><span>📶 📡 🔋</span></div>
+  <div class="scroll">
+
+    <!-- default -->
+    <section class="variant active" data-state="default">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 16px 16px 12px;">我的家庭</h1>
+
+      <div class="card">
+        <div class="card-row" style="margin-bottom: 12px;">
+          <div class="avatar a lg">我</div>
+          <div>
+            <p style="font-size: 15px; font-weight: 500; margin: 0;">我</p>
+            <p style="font-size: 12px; color: var(--color-text-tertiary); margin: 0;">加入于 9 月 1 日</p>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="card-row" style="margin-bottom: 16px;">
+          <div class="avatar b lg">配</div>
+          <div>
+            <p style="font-size: 15px; font-weight: 500; margin: 0;">配偶(小李)</p>
+            <p style="font-size: 12px; color: var(--color-text-tertiary); margin: 0;">加入于 9 月 1 日</p>
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button class="btn btn-outline" style="flex: 1;">重新生成码</button>
+          <button class="chip" style="flex: 1; justify-content: center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            复制码
+          </button>
+        </div>
+        <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0 0 8px;">当前邀请码</p>
+        <div class="code-grid">
+          <div class="code-cell">4</div><div class="code-cell">8</div><div class="code-cell">2</div><div class="code-cell">9</div><div class="code-cell">1</div><div class="code-cell">7</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); font-size: 12px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>09:42 后过期</span>
+        </div>
+      </div>
+
+      <p class="section-title" style="margin-top: 20px;">今日家庭完成度</p>
+      <div class="card">
+        <div class="progress-row">
+          <div class="card-row" style="gap: 6px;"><div class="avatar a sm">我</div><span style="font-size: 14px;">我</span></div>
+          <div class="progress-track"><div class="progress-fill a" style="width: 67%;"></div></div>
+          <span style="font-size: 13px; text-align: right;">4/6 67%</span>
+        </div>
+        <div class="progress-row">
+          <div class="card-row" style="gap: 6px;"><div class="avatar b sm">配</div><span style="font-size: 14px;">配偶</span></div>
+          <div class="progress-track"><div class="progress-fill b" style="width: 50%;"></div></div>
+          <span style="font-size: 13px; text-align: right;">3/6 50%</span>
+        </div>
+        <div class="divider"></div>
+        <div class="progress-row">
+          <span style="font-size: 14px; font-weight: 500;">今日合计</span>
+          <div class="progress-track"><div class="progress-fill a" style="width: 58%; background: linear-gradient(to right, var(--color-primary), var(--color-identity-b));"></div></div>
+          <span style="font-size: 13px; text-align: right;">7/12 58%</span>
+        </div>
+      </div>
+
+      <p class="section-title" style="margin-top: 20px;">共享任务 (3)</p>
+      <div class="shared-item" style="margin: 0 16px 8px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div style="flex: 1;">
+          <p class="title">医保卡续费</p>
+          <p class="meta">9 月 15 日 · 👁 共享给配偶查看</p>
+        </div>
+      </div>
+      <div class="shared-item" style="margin: 0 16px 8px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <div style="flex: 1;">
+          <p class="title">周末大扫除</p>
+          <p class="meta">周六 10:00 · 配偶 + 我</p>
+        </div>
+      </div>
+      <div class="shared-item" style="margin: 0 16px 8px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <div style="flex: 1;">
+          <p class="title">辅导孩子作业</p>
+          <p class="meta">每天 19:00 · 配偶 + 我</p>
+        </div>
+      </div>
+
+      <p class="section-title" style="margin-top: 20px;">家庭公开看板</p>
+      <div class="card">
+        <p style="font-size: 14px; color: var(--color-text-secondary); margin: 0 0 12px;">本周完成统计</p>
+        <div class="progress-row">
+          <div class="card-row" style="gap: 6px;"><div class="avatar a sm">我</div><span style="font-size: 14px;">我</span></div>
+          <div class="progress-track"><div class="progress-fill a" style="width: 75%;"></div></div>
+          <span style="font-size: 13px; text-align: right;">18/24</span>
+        </div>
+        <div class="progress-row">
+          <div class="card-row" style="gap: 6px;"><div class="avatar b sm">配</div><span style="font-size: 14px;">配偶</span></div>
+          <div class="progress-track"><div class="progress-fill b" style="width: 60%;"></div></div>
+          <span style="font-size: 13px; text-align: right;">12/20</span>
+        </div>
+        <div class="divider"></div>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0;">连续打卡:<span style="color: var(--color-primary); font-weight: 500;">我 5 天</span>,<span style="color: var(--color-identity-b); font-weight: 500;">配偶 3 天</span></p>
+      </div>
+    </section>
+
+    <!-- no-invite -->
+    <section class="variant" data-state="no-invite">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 16px 16px 12px;">我的家庭</h1>
+      <div class="card">
+        <div class="card-row" style="margin-bottom: 12px;">
+          <div class="avatar a lg">我</div>
+          <div><p style="font-size: 15px; font-weight: 500; margin: 0;">我</p><p style="font-size: 12px; color: var(--color-text-tertiary); margin: 0;">家庭创建者</p></div>
+        </div>
+        <div class="divider"></div>
+        <div class="card-row" style="margin-bottom: 16px;">
+          <div style="width: 48px; height: 48px; border-radius: 50%; background: var(--color-surface-variant); display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </div>
+          <div><p style="font-size: 15px; color: var(--color-text-tertiary); margin: 0;">等待配偶加入...</p></div>
+        </div>
+        <button class="btn" style="background: var(--color-primary); color: #fff; width: 100%;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align: middle; margin-right: 4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          邀请配偶
+        </button>
+      </div>
+      <p style="font-size: 13px; color: var(--color-text-secondary); text-align: center; margin: 20px 16px;">还没有家庭看板数据 · 配偶加入后开启</p>
+    </section>
+
+    <!-- invite-low -->
+    <section class="variant" data-state="invite-low">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 16px 16px 12px;">我的家庭</h1>
+      <div class="card" style="border-color: var(--color-warning);">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <div class="avatar a lg">我</div>
+          <div class="avatar b lg" style="margin-left: -16px;">配</div>
+          <div><p style="font-size: 14px; color: var(--color-text-secondary); margin: 0;">家庭已建立</p></div>
+        </div>
+        <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0 0 8px;">当前邀请码</p>
+        <div class="code-grid">
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">4</div>
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">8</div>
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">2</div>
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">9</div>
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">1</div>
+          <div class="code-cell" style="background: var(--color-warning-bg); color: var(--color-warning-text);">7</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px; color: var(--color-warning); font-size: 12px; font-weight: 500;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span>00:42 后过期</span>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+          <button class="btn btn-outline" style="flex: 1;">重新生成码</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- expired -->
+    <section class="variant" data-state="expired">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 16px 16px 12px;">我的家庭</h1>
+      <div class="card" style="opacity: 0.7;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <div class="avatar a lg">我</div>
+          <div><p style="font-size: 15px; font-weight: 500; margin: 0;">我(家庭创建者)</p></div>
+        </div>
+        <p style="font-size: 12px; color: var(--color-text-tertiary); margin: 0 0 8px;">之前的邀请码已过期</p>
+        <div class="code-grid">
+          <div class="code-cell" style="opacity: 0.4;">4</div><div class="code-cell" style="opacity: 0.4;">8</div><div class="code-cell" style="opacity: 0.4;">2</div><div class="code-cell" style="opacity: 0.4;">9</div><div class="code-cell" style="opacity: 0.4;">1</div><div class="code-cell" style="opacity: 0.4;">7</div>
+        </div>
+        <button class="btn" style="background: var(--color-primary); color: #fff; width: 100%; margin-top: 12px;">重新生成邀请码</button>
+      </div>
+    </section>
+
+    <!-- empty-shared -->
+    <section class="variant" data-state="empty-shared">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 16px 16px 12px;">我的家庭</h1>
+      <div class="card">
+        <div class="card-row" style="margin-bottom: 12px;">
+          <div class="avatar a lg">我</div>
+          <div class="avatar b lg" style="margin-left: -16px;">配</div>
+        </div>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0;">家庭已建立</p>
+      </div>
+      <p class="section-title" style="margin-top: 20px;">共享任务</p>
+      <div style="text-align: center; padding: 32px 16px;">
+        <div style="width: 64px; height: 64px; margin: 0 auto 16px; background: var(--color-surface); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </div>
+        <p style="font-size: 15px; font-weight: 500; margin: 0 0 4px;">还没有共享任务</p>
+        <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0;">在任务编辑页开启共享,让配偶也看到</p>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="bottom-tab">
+    <div class="tab">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h2v14H3zm4 0h2v14H7zm4 0h2v14h-2zm4 0h2v14h-2zm4 0h2v14h-2z"/></svg>
+      任务
+    </div>
+    <div class="tab active">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      家庭
+    </div>
+    <div class="tab">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      设置
+    </div>
+  </div>
+</div>
+
+<script>
+const phone = document.getElementById('phone');
+document.querySelectorAll('.state-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+  document.querySelector(`.variant[data-state="${btn.dataset.state}"]`).classList.add('active');
+}));
+document.querySelectorAll('.vp-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.vp-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('mobile', 'tablet', 'desktop');
+  phone.classList.add(btn.dataset.vp);
+}));
+document.querySelectorAll('.theme-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('light', 'dark');
+  phone.classList.add(btn.dataset.theme);
+}));
+</script>
+</body>
+</html>

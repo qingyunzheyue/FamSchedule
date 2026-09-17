@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pair Home 配对主页 · FamSchedule 原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root {
+  --color-primary: #DC5A24;
+  --color-background: #F4ECDC;
+  --color-surface: #FFF9F0;
+  --color-text-primary: #3A2E20;
+  --color-text-secondary: #7A6E5D;
+  --color-text-tertiary: #A89B86;
+  --color-border: #E8DFD0;
+  --color-identity-b: #5B7A8C;
+  --color-success: #5C9D7E;
+  --color-warning: #E0A341;
+  --color-warning-bg: #FBF1DC;
+  --color-warning-text: #7A5615;
+  --color-error: #C95444;
+  --color-error-bg: #FBEAE7;
+  --color-error-text: #7A2E25;
+  --radius-lg: 14px; --radius-xl: 20px;
+  --shadow-1: 0 1px 2px rgba(58,46,32,0.06), 0 1px 3px rgba(58,46,32,0.04);
+  --shadow-2: 0 2px 4px rgba(58,46,32,0.08), 0 4px 8px rgba(58,46,32,0.04);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #E5DCC5; color: var(--color-text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: #fff; padding: 12px 20px; border-radius: var(--radius-lg); box-shadow: var(--shadow-1); margin-bottom: 20px; max-width: 1320px; width: 100%; }
+.toolbar h1 { font-size: 15px; font-weight: 600; margin: 0 12px 0 0; }
+.toolbar .group { display: flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 12px; color: var(--color-text-secondary); margin-right: 4px; }
+.toolbar button { padding: 6px 12px; font-size: 12px; font-weight: 500; background: var(--color-surface); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.toolbar button:hover { background: var(--color-background); }
+.toolbar button.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.phone { background: var(--color-background); border-radius: 32px; box-shadow: 0 24px 48px -12px rgba(58,46,32,0.25); overflow: hidden; position: relative; transition: width 0.3s, height 0.3s; width: 375px; height: 812px; }
+.phone.mobile { width: 375px; height: 812px; }
+.phone.tablet { width: 768px; height: 1024px; }
+.phone.desktop { width: 1280px; height: 800px; }
+.phone.dark { --color-background: #1A1814; --color-surface: #25221D; --color-text-primary: #F4ECDC; --color-text-secondary: #A89B86; --color-text-tertiary: #6E6452; --color-border: #3A332B; }
+.status-bar { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; font-size: 12px; font-weight: 600; color: var(--color-text-primary); }
+.content { padding: 32px 20px; height: calc(100% - 28px); display: flex; flex-direction: column; }
+.variant { display: none; width: 100%; height: 100%; }
+.variant.active { display: flex; flex-direction: column; }
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-1); cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 16px; }
+.card:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
+.card-icon { width: 40px; height: 40px; background: var(--color-primary); color: #fff; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.card-icon.b { background: var(--color-identity-b); }
+.card-body { flex: 1; }
+.card-title { font-size: 17px; font-weight: 500; margin: 0 0 4px; }
+.card-desc { font-size: 13px; color: var(--color-text-secondary); margin: 0; }
+.btn-primary { padding: 14px 32px; font-size: 15px; font-weight: 500; background: var(--color-primary); color: #fff; border: none; border-radius: 10px; cursor: pointer; width: 100%; }
+.banner { padding: 12px 16px; border-radius: 12px; display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.banner.error { background: var(--color-error-bg); color: var(--color-error-text); }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>📱 Pair Home · 配对主页</h1>
+  <div class="group">
+    <label>状态:</label>
+    <button class="state-btn active" data-state="default">default</button>
+    <button class="state-btn" data-state="loading">loading</button>
+    <button class="state-btn" data-state="network-error">network-error</button>
+    <button class="state-btn" data-state="already-in-family">already</button>
+  </div>
+  <div class="group">
+    <label>视口:</label>
+    <button class="vp-btn active" data-vp="mobile">📱 375</button>
+    <button class="vp-btn" data-vp="tablet">📱 768</button>
+    <button class="vp-btn" data-vp="desktop">🖥 1280</button>
+  </div>
+  <div class="group">
+    <label>主题:</label>
+    <button class="theme-btn active" data-theme="light">☀ 亮</button>
+    <button class="theme-btn" data-theme="dark">🌙 暗</button>
+  </div>
+</div>
+
+<div class="phone mobile light" id="phone">
+  <div class="status-bar"><span>9:41</span><span>📶 📡 🔋</span></div>
+
+  <div class="content">
+
+    <!-- default -->
+    <section class="variant active" data-state="default">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 0 0 8px;">欢迎来到 FamSchedule</h1>
+      <p style="font-size: 15px; color: var(--color-text-secondary); margin: 0 0 32px;">选择一个方式,开始你们的家庭日程</p>
+
+      <div class="card" style="margin-bottom: 16px; animation: fadeIn 0.4s ease-out 0.1s both;">
+        <div class="card-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </div>
+        <div class="card-body">
+          <p class="card-title">创建家庭</p>
+          <p class="card-desc">生成邀请码,邀请配偶加入</p>
+        </div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div class="card" style="animation: fadeIn 0.4s ease-out 0.2s both;">
+        <div class="card-icon b">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l7.89 5.26a2 2 0 0 0 2.22 0L21 8M5 19h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2z"/></svg>
+        </div>
+        <div class="card-body">
+          <p class="card-title">加入家庭</p>
+          <p class="card-desc">输入配偶给你的 6 位邀请码</p>
+        </div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <div style="flex: 1;"></div>
+      <p style="font-size: 11px; color: var(--color-text-tertiary); text-align: center; margin: 0; line-height: 1.6;">我们不会收集任何个人信息<br>只用一个匿名设备 ID</p>
+    </section>
+
+    <!-- loading -->
+    <section class="variant" data-state="loading">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 0 0 8px;">欢迎来到 FamSchedule</h1>
+      <p style="font-size: 15px; color: var(--color-text-secondary); margin: 0 0 32px;">选择一个方式,开始你们的家庭日程</p>
+      <div class="card disabled" style="margin-bottom: 16px; opacity: 0.7;">
+        <div class="card-icon" style="opacity: 0.6;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </div>
+        <div class="card-body">
+          <p class="card-title">创建家庭</p>
+          <p class="card-desc">创建中...</p>
+        </div>
+        <div style="width: 16px; height: 16px; border: 2px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+      </div>
+      <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+      <div class="card" style="opacity: 0.4; pointer-events: none;">
+        <div class="card-icon b"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l7.89 5.26a2 2 0 0 0 2.22 0L21 8M5 19h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2z"/></svg></div>
+        <div class="card-body"><p class="card-title">加入家庭</p><p class="card-desc">输入配偶给你的 6 位邀请码</p></div>
+      </div>
+      <div style="flex: 1;"></div>
+      <p style="font-size: 11px; color: var(--color-text-tertiary); text-align: center; margin: 0; line-height: 1.6;">我们不会收集任何个人信息<br>只用一个匿名设备 ID</p>
+    </section>
+
+    <!-- network-error -->
+    <section class="variant" data-state="network-error">
+      <div class="banner error" style="margin-bottom: 20px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>网络异常,操作可能无法完成</span>
+      </div>
+      <h1 style="font-size: 22px; font-weight: 600; margin: 0 0 8px;">欢迎来到 FamSchedule</h1>
+      <p style="font-size: 15px; color: var(--color-text-secondary); margin: 0 0 32px;">选择一个方式,开始你们的家庭日程</p>
+      <div class="card" style="margin-bottom: 16px;">
+        <div class="card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
+        <div class="card-body"><p class="card-title">创建家庭</p><p class="card-desc">生成邀请码,邀请配偶加入</p></div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div class="card">
+        <div class="card-icon b"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l7.89 5.26a2 2 0 0 0 2.22 0L21 8M5 19h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2z"/></svg></div>
+        <div class="card-body"><p class="card-title">加入家庭</p><p class="card-desc">输入配偶给你的 6 位邀请码</p></div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-tertiary)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+      <div style="flex: 1;"></div>
+      <p style="font-size: 11px; color: var(--color-text-tertiary); text-align: center; margin: 0; line-height: 1.6;">我们不会收集任何个人信息<br>只用一个匿名设备 ID</p>
+    </section>
+
+    <!-- already-in-family -->
+    <section class="variant" data-state="already-in-family">
+      <h1 style="font-size: 22px; font-weight: 600; margin: 0 0 8px;">欢迎来到 FamSchedule</h1>
+      <p style="font-size: 15px; color: var(--color-text-secondary); margin: 0 0 32px;">选择一个方式,开始你们的家庭日程</p>
+      <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px;">
+        <div style="width: 32px; height: 32px; background: var(--color-identity-b); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px;">配</div>
+        <div>
+          <p style="font-size: 14px; font-weight: 500; margin: 0;">你已在家庭中</p>
+          <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0;">配偶:小李</p>
+        </div>
+      </div>
+      <div class="card disabled" style="margin-bottom: 16px; opacity: 0.4;">
+        <div class="card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
+        <div class="card-body"><p class="card-title">创建家庭</p><p class="card-desc">你已在某家庭中</p></div>
+      </div>
+      <div class="card disabled" style="opacity: 0.4;">
+        <div class="card-icon b"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l7.89 5.26a2 2 0 0 0 2.22 0L21 8M5 19h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2z"/></svg></div>
+        <div class="card-body"><p class="card-title">加入家庭</p><p class="card-desc">你已在某家庭中</p></div>
+      </div>
+      <div style="flex: 1;"></div>
+      <button class="btn-primary" style="margin-bottom: 16px;">进入家庭</button>
+    </section>
+
+  </div>
+</div>
+
+<script>
+const phone = document.getElementById('phone');
+document.querySelectorAll('.state-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+  document.querySelector(`.variant[data-state="${btn.dataset.state}"]`).classList.add('active');
+}));
+document.querySelectorAll('.vp-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.vp-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('mobile', 'tablet', 'desktop');
+  phone.classList.add(btn.dataset.vp);
+}));
+document.querySelectorAll('.theme-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  phone.classList.remove('light', 'dark');
+  phone.classList.add(btn.dataset.theme);
+}));
+</script>
+</body>
+</html>

@@ -1,0 +1,820 @@
+openapi: 3.1.0
+
+info:
+  title: FamSchedule API
+  version: 1.0.0
+  description: |
+    FamSchedule v1.0 API 规范 — 对应 17 个 P0 用户故事(PRD v1.3)。
+
+    底层基于 Supabase(PostgREST + RPC),所有路径前缀 `/rest/v1/`。
+    客户端经 Expo SDK `@supabase/supabase-js` 调用,无需手写 fetch。
+
+    ## 鉴权
+    所有请求必须带两个头:
+    - `apikey: <SUPABASE_ANON_KEY>` — 项目级 public key
+    - `Authorization: Bearer <jwt>` — `supabase.auth.signInAnonymously()` 返回的 JWT(ADR-002)
+
+    ## 写策略
+    - 表的 CRUD 走 PostgREST:`GET/POST/PATCH/DELETE /rest/v1/{table}`
+    - 业务逻辑(原子 / 校验 / 副作用)走 RPC:`POST /rest/v1/rpc/{function_name}`
+    - 凡是涉及"first-finisher wins"、"补卡截止"、"5 分钟撤销"、"邀请码生命周期"、"家庭设置时段范围校验"的写,必须走 RPC,不能直接 PATCH
+
+    ## 对应 ADR
+    001 / 002 / 003 / 004 / 005 / 006 / 007(详见 `adr-*.md`)
+
+servers:
+  - url: https://<project-ref>.supabase.co/rest/v1
+    description: Supabase Project 1(生产,ADR-001)
+    variables:
+      project-ref:
+        default: '<your-project-ref>'
+        description: Supabase 项目 ref
+
+security:
+  - SupabaseAuth: []
+
+tags:
+  - name: Auth
+    description: 身份与认证(由 Supabase Auth 处理,这里只列契约)
+  - name: Family
+    description: 家庭与成员(US-012)
+  - name: Invite
+    description: 邀请码(US-012)
+  - name: Task
+    description: 任务实例(US-001/002/003/005/006/009/010/014/015)
+  - name: TaskTemplate
+    description: 周期任务模板(US-003/004)
+  - name: CheckIn
+    description: 打卡 / 补卡 / 撤销(US-005/006)
+  - name: Settings
+    description: 集中设置(US-017)
+  - name: Board
+    description: 家庭公开看板(US-011)
+
+paths:
+
+  # ============================================================
+  # Auth(由 Supabase Auth SDK 处理,这里列契约方便客户端对齐)
+  # ============================================================
+  /auth/v1/admin/users:
+    summary: Supabase Anon Sign-in
+    description: |
+      客户端调用 `supabase.auth.signInAnonymously()`(不需要直接打这个 URL)。
+      返回 `{ access_token, refresh_token, user }`,其中 `user.id` 即 PRD 要求的"设备 ID"(ADR-002)。
+    post:
+      tags: [Auth]
+      summary: 匿名登录
+      operationId: authAnonymousSignIn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  description: 可选,写入 user_metadata 的初始数据
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+
+  /auth/v1/user:
+    get:
+      tags: [Auth]
+      summary: 当前用户信息(含 raw_user_meta_data,US-016 / US-017 设备本地设置)
+      operationId: authGetUser
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUser'
+    put:
+      tags: [Auth]
+      summary: 更新 raw_user_meta_data(白名单状态、device_meta 等设备本地设置 — ADR-007)
+      operationId: authUpdateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  additionalProperties: true
+                  description: 合并到 raw_user_meta_data 的键值
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthUser'
+
+  # ============================================================
+  # Family(US-012)
+  # ============================================================
+  /rpc/create_family:
+    post:
+      tags: [Family]
+      summary: 创建家庭(US-012)
+      description: |
+        创建空家庭 + 把当前 user 设为 member + 插入默认 family_settings。
+        要求:调用者当前不在任何 family(MVP 限制)。
+      operationId: createFamily
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+                description: 新 family_id
+        '4xx':
+          $ref: '#/components/responses/RpcError'
+
+  /family_members:
+    get:
+      tags: [Family]
+      summary: 查询家庭成员(US-002 隐含,US-011 看板)
+      operationId: listFamilyMembers
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FamilyMember' }
+
+  # ============================================================
+  # Invite(US-012,ADR-004)
+  # ============================================================
+  /rpc/create_invite:
+    post:
+      tags: [Invite]
+      summary: 创建邀请码(US-012,10 分钟有效)
+      description: |
+        调用者必须是某 family 成员。返回 6 位数字 code + 过期时间。
+        客户端拿到 code 后展示给配偶,配偶在另一台设备调用 `accept_invite`。
+      operationId: createInvite
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: '482917' }
+                  expires_at: { type: string, format: date-time }
+        '4xx':
+          $ref: '#/components/responses/RpcError'
+
+  /rpc/accept_invite:
+    post:
+      tags: [Invite]
+      summary: 加入家庭(US-012,原子 join — ADR-004)
+      description: |
+        单事务:check code + mark used + insert family_member + 清理同 family 其他未用码。
+        要求:调用者当前不在任何 family。
+      operationId: acceptInvite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_code]
+              properties:
+                p_code: { type: string, example: '482917' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+                description: 加入的 family_id
+        '4xx':
+          $ref: '#/components/responses/RpcError'
+
+  /invite_codes:
+    get:
+      tags: [Invite]
+      summary: 列出本 family 邀请码(含已用/过期 — 审计)
+      operationId: listInviteCodes
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+        - in: query
+          name: used_at
+          schema: { type: string, enum: [is.null] }
+          description: 只查未用的:`used_at=is.null`
+        - in: query
+          name: order
+          schema: { type: string, example: 'created_at.desc' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/InviteCode' }
+    delete:
+      tags: [Invite]
+      summary: 撤销未用的邀请码(creator 主动取消)
+      operationId: deleteInviteCode
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string }
+          description: 6 位邀请码
+        - in: query
+          name: used_at
+          schema: { type: string, enum: [is.null] }
+          description: 必须带 `used_at=is.null` 才能删(RLS 兜底)
+      responses:
+        '204': { description: 成功 }
+
+  # ============================================================
+  # Task(US-001/002/003/005/006/009/010/014/015)
+  # ============================================================
+  /tasks:
+    get:
+      tags: [Task]
+      summary: 查询任务(US-002)
+      description: |
+        通用列表端点,按 family_id 过滤为强约束(RLS 也会挡)。
+        客户端常见用法:
+        - "今天"  : `task_date=eq.{today}&cancelled=eq.false`
+        - "本周"  : `task_date=gte.{weekStart}&task_date=lte.{weekEnd}`
+        - "我的"  : `assignee_id=eq.{me}&or=(assignee_id.eq.{me},co_executor_ids.cs.{me})`
+        - "未完成": `completed_at=is.null&cancelled=eq.false`
+        - "已过期": `task_date=lt.{today}&completed_at=is.null&cancelled=eq.false`(US-014)
+      operationId: listTasks
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+        - in: query
+          name: task_date
+          schema: { type: string, example: 'eq.2026-09-10' }
+        - in: query
+          name: task_date
+          schema: { type: string, example: 'gte.2026-09-10' }
+        - in: query
+          name: task_date
+          schema: { type: string, example: 'lte.2026-09-16' }
+        - in: query
+          name: assignee_id
+          schema: { type: string, example: 'eq.{uuid}' }
+        - in: query
+          name: completed_at
+          schema: { type: string, enum: [is.null] }
+        - in: query
+          name: cancelled
+          schema: { type: string, enum: [eq.true, eq.false] }
+        - in: query
+          name: is_shared_view
+          schema: { type: string, enum: [eq.true, eq.false] }
+        - in: query
+          name: order
+          schema: { type: string, example: 'task_date.asc,task_time.asc.nullsfirst' }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 1000 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Task' }
+    post:
+      tags: [Task]
+      summary: 创建一次性任务(US-001)
+      description: |
+        一次性任务:`template_id=null`。
+        周期任务:用 `/task_templates` POST 模板 + 由客户端(或 RPC)展开后批量 INSERT 此端点。
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskInsert' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+    patch:
+      tags: [Task]
+      summary: 批量编辑任务(US-003 / US-009 / US-010)
+      description: |
+        编辑字段(标题/时间/指派人/共同执行人/共享标记等)。
+        改 completed_at 走 `/rpc/checkin_task` 或 `/rpc/undo_checkin`,不要用此端点(ADR-005)。
+      operationId: updateTasks
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+        - in: query
+          name: family_id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskUpdate' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Task' }
+    delete:
+      tags: [Task]
+      summary: 删除任务(US-003)
+      description: 周期任务的"删除整个系列"应改 template.active=false + 删未来实例,不用此端点。
+      operationId: deleteTasks
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+        - in: query
+          name: family_id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+      responses:
+        '204': { description: 成功 }
+
+  /family_shared_tasks:
+    get:
+      tags: [Board]
+      summary: 家庭公开看板(US-011)
+      description: |
+        只返回 `is_shared_view=true` 的任务,RLS 仍按 family 隔离。
+        客户端可作为家庭看板的数据源,无需在前端过滤。
+      operationId: listFamilySharedTasks
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Task' }
+
+  # ============================================================
+  # TaskTemplate(US-003 / US-004,ADR-003)
+  # ============================================================
+  /task_templates:
+    get:
+      tags: [TaskTemplate]
+      summary: 列出周期任务模板
+      operationId: listTaskTemplates
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+        - in: query
+          name: active
+          schema: { type: string, enum: [eq.true, eq.false] }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TaskTemplate' }
+    post:
+      tags: [TaskTemplate]
+      summary: 创建周期任务模板(US-004)
+      description: |
+        创建后客户端按 `recurrence_rule` 展开为 60 天实例,逐条 INSERT 到 `/tasks`。
+        或调用方自己生成实例,服务端只存模板。
+      operationId: createTaskTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskTemplateInsert' }
+      responses:
+        '201':
+          description: 成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskTemplate' }
+    patch:
+      tags: [TaskTemplate]
+      summary: 编辑模板(US-003)
+      description: |
+        客户端在改完模板后,需要级联 UPDATE 未来未完成实例(ADR-003):
+        `PATCH /tasks?template_id=eq.{uuid}&task_date=gte.{today}&completed_at=is.null`
+      operationId: updateTaskTemplate
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+        - in: query
+          name: family_id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskTemplateUpdate' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TaskTemplate' }
+    delete:
+      tags: [TaskTemplate]
+      summary: 软删除模板(US-003,设置 active=false 而不是物理删除)
+      operationId: softDeleteTaskTemplate
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+        - in: query
+          name: family_id
+          required: true
+          schema: { type: string, example: 'eq.{uuid}' }
+      responses:
+        '204': { description: 成功 }
+
+  # ============================================================
+  # CheckIn(US-005 / US-006,ADR-005)
+  # ============================================================
+  /rpc/checkin_task:
+    post:
+      tags: [CheckIn]
+      summary: 打卡 / 补卡(US-005 / US-006,幂等)
+      description: |
+        原子 SQL,first-finisher wins。
+        - `p_is_makeup=false`:正常打卡
+        - `p_is_makeup=true`:补卡,自动校验 family_settings.late_checkin_cutoff
+        返回 0 行 = 配偶已先完成 / 任务已取消 / 补卡被禁 / 补卡已过截止
+      operationId: checkinTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_task_id]
+              properties:
+                p_task_id: { type: string, format: uuid }
+                p_is_makeup: { type: boolean, default: false }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 1
+                items: { $ref: '#/components/schemas/CheckinResult' }
+        '4xx':
+          $ref: '#/components/responses/RpcError'
+
+  /rpc/undo_checkin:
+    post:
+      tags: [CheckIn]
+      summary: 撤销打卡(US-005,5 分钟窗口)
+      description: |
+        只能撤销自己的打卡,且在 completed_at 后 5 分钟内。
+        返回 0 行 = 超时 / 配偶完成 / 已撤销过。
+      operationId: undoCheckin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_task_id]
+              properties:
+                p_task_id: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 成功(可能为空数组)
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 1
+                items: { $ref: '#/components/schemas/CheckinResult' }
+
+  # ============================================================
+  # Settings(US-017,ADR-007)
+  # ============================================================
+  /family_settings:
+    get:
+      tags: [Settings]
+      summary: 读取家庭共享设置(早/晚汇总时间、过期窗口、补卡截止)
+      operationId: getFamilySettings
+      parameters:
+        - $ref: '#/components/parameters/FamilyIdEq'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 1
+                items: { $ref: '#/components/schemas/FamilySettings' }
+
+  /rpc/update_family_setting:
+    post:
+      tags: [Settings]
+      summary: 更新家庭共享设置(US-017,带校验)
+      description: |
+        支持的 key:`morning_digest_time` / `evening_digest_time` / `expiry_window` / `late_checkin_cutoff`
+        推送时间会自动校验在 `digest_time_min..digest_time_max` 范围内。
+      operationId: updateFamilySetting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [p_key, p_value]
+              properties:
+                p_key: { type: string, enum: [morning_digest_time, evening_digest_time, expiry_window, late_checkin_cutoff] }
+                p_value: { type: string, description: 字符串值(服务端按 key cast) }
+      responses:
+        '204': { description: 成功 }
+        '4xx':
+          $ref: '#/components/responses/RpcError'
+
+components:
+
+  securitySchemes:
+    SupabaseAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Supabase Auth 签发的 JWT。客户端通过 `supabase.auth.signInAnonymously()` 获取。
+        另需 `apikey` 头携带项目 anon public key。
+
+  parameters:
+    FamilyIdEq:
+      in: query
+      name: family_id
+      required: true
+      schema: { type: string, example: 'eq.{uuid}' }
+      description: PostgREST 过滤语法,RLS 会再次校验
+
+  responses:
+    RpcError:
+      description: RPC 业务错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RpcError' }
+
+  schemas:
+
+    # -------------------- Auth --------------------
+    AuthSession:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer }
+        token_type: { type: string, example: 'bearer' }
+        user: { $ref: '#/components/schemas/AuthUser' }
+
+    AuthUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: '= PRD 设备 ID(ADR-002)' }
+        is_anonymous: { type: boolean }
+        raw_user_meta_data:
+          type: object
+          description: 设备本地设置(ADR-007:whitelist_check / device_meta)
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # -------------------- Family --------------------
+    Family:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+
+    FamilyMember:
+      type: object
+      properties:
+        family_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        joined_at: { type: string, format: date-time }
+
+    # -------------------- Invite --------------------
+    InviteCode:
+      type: object
+      properties:
+        code: { type: string, example: '482917' }
+        family_id: { type: string, format: uuid }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        used_at: { type: string, format: date-time, nullable: true }
+        used_by: { type: string, format: uuid, nullable: true }
+
+    # -------------------- Task --------------------
+    Task:
+      type: object
+      description: 任务实例(一次性或周期展开后的某次发生)
+      properties:
+        id: { type: string, format: uuid }
+        template_id: { type: string, format: uuid, nullable: true }
+        family_id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        task_date: { type: string, format: date }
+        task_time: { type: string, format: time, nullable: true }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean }
+        created_by: { type: string, format: uuid }
+        completed_at: { type: string, format: date-time, nullable: true }
+        completed_by: { type: string, format: uuid, nullable: true }
+        is_makeup: { type: boolean }
+        cancelled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskInsert:
+      type: object
+      required: [family_id, title, task_date, assignee_id, created_by]
+      properties:
+        id: { type: string, format: uuid, description: '客户端可预生成(ADR-005 离线写)' }
+        template_id: { type: string, format: uuid }
+        family_id: { type: string, format: uuid }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        task_date: { type: string, format: date }
+        task_time: { type: string, format: time }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean, default: false }
+
+    TaskUpdate:
+      type: object
+      description: |
+        允许改的字段:title / description / task_date / task_time / assignee_id / co_executor_ids / is_shared_view / cancelled。
+        **不要**改 completed_at / completed_by / is_makeup(走 RPC)。
+      properties:
+        title: { type: string }
+        description: { type: string, nullable: true }
+        task_date: { type: string, format: date }
+        task_time: { type: string, format: time, nullable: true }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean }
+        cancelled: { type: boolean }
+
+    CheckinResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        completed_at: { type: string, format: date-time }
+        completed_by: { type: string, format: uuid }
+        is_makeup: { type: boolean }
+
+    # -------------------- TaskTemplate --------------------
+    TaskTemplate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        family_id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        recurrence_rule:
+          type: object
+          description: 'RRULE 子集:`{"freq":"daily"}` / `{"freq":"weekly","byday":["MO","WE","FR"]}` / `{"freq":"monthly","bymonthday":15}`'
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date, nullable: true }
+        task_time: { type: string, format: time, nullable: true }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean }
+        active: { type: boolean }
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskTemplateInsert:
+      type: object
+      required: [family_id, title, recurrence_rule, start_date, assignee_id, created_by]
+      properties:
+        family_id: { type: string, format: uuid }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        recurrence_rule:
+          type: object
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        task_time: { type: string, format: time }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean, default: false }
+
+    TaskTemplateUpdate:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string, nullable: true }
+        recurrence_rule: { type: object }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date, nullable: true }
+        task_time: { type: string, format: time, nullable: true }
+        assignee_id: { type: string, format: uuid }
+        co_executor_ids:
+          type: array
+          items: { type: string, format: uuid }
+        is_shared_view: { type: boolean }
+        active: { type: boolean }
+
+    # -------------------- Settings --------------------
+    FamilySettings:
+      type: object
+      properties:
+        family_id: { type: string, format: uuid }
+        morning_digest_time: { type: string, format: time, example: '08:00:00' }
+        evening_digest_time: { type: string, format: time, example: '20:00:00' }
+        digest_time_min: { type: string, format: time, example: '06:00:00' }
+        digest_time_max: { type: string, format: time, example: '22:00:00' }
+        expiry_window:
+          type: string
+          enum: [yesterday_today, this_week, all, off]
+          default: yesterday_today
+        late_checkin_cutoff:
+          type: string
+          enum: [same_day_2359, next_day_1200, off]
+          default: same_day_2359
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # -------------------- Errors --------------------
+    RpcError:
+      type: object
+      description: |
+        PostgREST / RPC 错误响应。
+        常见 message 字符串(由 `db-v1.0.sql` 中的 RAISE EXCEPTION 抛出):
+        - `Not authenticated`
+        - `User <uuid> is already in a family (MVP: one family per user)`
+        - `Caller is not in any family`
+        - `Invalid, expired, or already used invite code`
+        - `Time <hh:mm:ss> outside allowed range [<min> - <max>]`
+        - `Unknown setting key: <key>`
+        - `Failed to generate unique invite code after 5 attempts`
+        - `Family <uuid> already has 2 members (PRD C1)`
+      properties:
+        code: { type: string, example: 'P0001' }
+        message: { type: string }
+        details: { type: string, nullable: true }
+        hint: { type: string, nullable: true }
