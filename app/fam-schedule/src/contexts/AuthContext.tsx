@@ -9,11 +9,13 @@
  *      防止 AuthService 的自动重连逻辑接住这次登出
  *   5. 暴露 retryBoot() 给 UI:用户点击错误屏的"重试"按钮时,重新跑一次 bootGuard
  *
- * 暴露 API(对消费侧不变 + T-US013-2 新增):
+ * 暴露 API(对消费侧不变 + T-US013-2 新增 + T-US013-2-rev1 收敛):
  *   - user           : User | null       — 当前 anon user
  *   - session        : Session | null    — 完整 session(access + refresh token)
  *   - isLoading      : boolean           — true 时 UI 应显示 splash,不渲染业务屏
- *   - bootError      : Error | null      — T-US013-2 新增;bootGuard 两次都失败时非空
+ *   - bootError      : boolean           — T-US013-2 新增;bootGuard 两次都失败时 true
+ *                                         (rev1:从 `Error | null` 收成 `boolean`,
+ *                                          UI 文案由 SplashScreen 默认值单一来源管理)
  *   - signInAnonymously(): Promise<void> — 手动触发(目前未在 UI 暴露,作为逃生口保留)
  *   - signOut()      : Promise<void>     — 标主动 + 清 SecureStore + SDK session
  *   - retryBoot()    : Promise<void>     — T-US013-2 新增;bootGuard 失败后用户主动重试
@@ -53,8 +55,10 @@ export interface AuthContextValue {
   user: User | null;
   session: Session | null;
   isLoading: boolean;
-  /** T-US013-2 新增:bootGuard 两次都失败时非空。Gate 据此渲染 SplashScreen error 模式 + 重试按钮 */
-  bootError: Error | null;
+  /** T-US013-2 新增;rev1 收敛为 boolean:bootGuard 两次都失败时 true。
+   *  Gate 据此渲染 SplashScreen error 模式 + 重试按钮;
+   *  UI 文案由 SplashScreen 默认值(splash-v1.0 §6)统一管理,AuthContext 不掺文案 */
+  bootError: boolean;
   signInAnonymously: () => Promise<void>;
   signOut: () => Promise<void>;
   /** T-US013-2 新增:用户点击"重试"按钮后调,重新跑一次 bootGuard */
@@ -75,8 +79,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  // T-US013-2:bootGuard 失败时非空;Gate 据此切到 SplashScreen error 模式 + 重试按钮
-  const [bootError, setBootError] = useState<Error | null>(null);
+  // T-US013-2:bootGuard 失败时 true;Gate 据此切到 SplashScreen error 模式 + 重试按钮
+  // T-US013-2-rev1:从 Error | null 收敛为 boolean,文案由 SplashScreen 默认值统一管理
+  const [bootError, setBootError] = useState<boolean>(false);
 
   /**
    * 主动登出意图标记:
@@ -113,7 +118,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!mounted) return;
 
         if (result.status === 'failed') {
-          setBootError(result.error);
+          setBootError(true);
         }
         // ready → session 由 subscribeAuthState listener 写入(见上方注释)
       } catch (err) {
@@ -121,7 +126,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // eslint-disable-next-line no-console
         console.error('[AuthContext] init threw unexpectedly:', err);
         if (mounted) {
-          setBootError(err instanceof Error ? err : new Error(String(err)));
+          setBootError(true);
         }
       } finally {
         if (mounted) setIsLoading(false);
@@ -208,17 +213,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
    *     failed → setBootError → UI 仍 error,可再次点击重试
    */
   const retryBoot = useCallback(async (): Promise<void> => {
-    setBootError(null);
+    setBootError(false);
     setIsLoading(true);
     try {
       const result = await bootGuard();
       if (result.status === 'failed') {
-        setBootError(result.error);
+        setBootError(true);
       }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[AuthContext] retryBoot threw unexpectedly:', err);
-      setBootError(err instanceof Error ? err : new Error(String(err)));
+      setBootError(true);
     } finally {
       setIsLoading(false);
     }

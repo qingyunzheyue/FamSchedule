@@ -7,7 +7,9 @@
  *   1. AuthService.restoreSession() — 优先用 SDK 已从 SecureStore 恢复的 session(冷启动有缓存时直接 ready)
  *   2. AuthService.signInAnonymously() — 第 1 次尝试
  *   3. 失败 → 等 1 秒 → AuthService.signInAnonymously() — 第 2 次(也是唯一一次重试)
- *   4. 仍失败 → 返回 { status: 'failed', error } 让上层渲染错误 UI
+ *   4. 仍失败 → 返回 { status: 'failed' } 让上层渲染错误 UI
+ *      (bootGuard 不带 error 文案:UI 文案是 SplashScreen 的默认值,
+ *      集中管理避免 i18n 时漏改 — 详见 T-US013-2 review Major #1)
  *
  * 为什么 retry 1 次(不无限重试 / 不 0 重试):
  *   - 0 重试 → 启动期网络抖动直接报错退出,首启体验差
@@ -32,10 +34,16 @@ import {
 /**
  * bootGuard 结果。discriminated union 让消费侧 switch(BootResult.status) 能被 TS
  * exhaustiveness 检查,不会漏分支。
+ *
+ * 失败分支不带 error 文案(T-US013-2 review Major #1 收敛):
+ *   - 原 `{ status: 'failed', error: new Error('无法连接到服务器...') }` 与
+ *     SplashScreen 的 DEFAULT_ERROR_MESSAGE 文案重复,i18n 时必须改两处
+ *   - 现在 UI 文案由 SplashScreen 单一来源管理(splash-v1.0.md §6);
+ *     bootGuard 只表达"成败"语义,不掺杂 UI 文案
  */
 export type BootResult =
   | { status: 'ready' }
-  | { status: 'failed'; error: Error };
+  | { status: 'failed' };
 
 /**
  * 两次 signInAnonymously 之间的退避时间。1s 覆盖大多数瞬态网络问题又不至于让用户久等。
@@ -66,11 +74,9 @@ export async function bootGuard(): Promise<BootResult> {
   }
 
   // 4. 两次都失败 → 上层渲染错误 UI(本 MVP "再失败报错退出" 的报错 = 阻塞错误占位 + 重试按钮,
-  //    让用户决定重试或退出,而不是默默重连)
-  return {
-    status: 'failed',
-    error: new Error('无法连接到服务器,请检查网络后重试'),
-  };
+  //    让用户决定重试或退出,而不是默默重连)。文案由 SplashScreen 默认值统一管理,
+  //    bootGuard 不掺杂 UI 文案(见 type 注释 + T-US013-2 review Major #1)
+  return { status: 'failed' };
 }
 
 // ---- 内部工具 -----------------------------------------------------------

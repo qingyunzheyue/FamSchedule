@@ -194,7 +194,9 @@ function Gate() {
   // T-US013-2:启动错误优先于其他 splash 状态显示
   // (auth 都没过 → 谈家庭/路由都没意义,直接阻塞错误占位等用户重试)
   if (bootError) {
-    return <SplashScreen mode="error" errorMessage={bootError.message} onRetry={retryBoot} />;
+    // T-US013-2-rev1:不传 errorMessage,文案走 SplashScreen 默认值(splash-v1.0 §6);
+    // 错误文案集中管理,避免 i18n 时漏改 — 详见 review Major #1
+    return <SplashScreen mode="error" onRetry={retryBoot} />;
   }
 
   // 任一加载未完成:显示 splash(loading 模式)

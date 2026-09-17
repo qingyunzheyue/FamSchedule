@@ -6,7 +6,7 @@
  *   2. restoreSession signed_out + signInAnonymously 第 1 次成功 → ready
  *   3. restoreSession signed_out + signInAnonymously 第 1 次失败 + 第 2 次成功 → ready
  *      (验证 retry-once 真的发生)
- *   4. 两次都失败 → failed,error 是 Error 实例
+ *   4. 两次都失败 → failed(rev1:BootResult 不再带 error 字段,UI 文案由 SplashScreen 默认值统一管理)
  *   5. retry 严格只 1 次(无无限循环风险):所有 attempt 失败 → signInAnonymously 仅被调 2 次
  *   6. retry 间隔 ≈ RETRY_DELAY_MS(默认 1s) — 防回归到 0 退避导致刷接口
  *
@@ -117,16 +117,18 @@ describe('bootGuard', () => {
     expect(mockSignIn).toHaveBeenCalledTimes(2);
   });
 
-  it('returns failed with Error after retry also fails', async () => {
+  it('returns failed after retry also fails (no error payload — UI copy is the SplashScreen default)', async () => {
     mockRestoreSession.mockResolvedValue({ status: 'signed_out' });
     mockSignIn.mockResolvedValue({ status: 'signed_out' });
 
     const result = await bootGuard();
 
     expect(result.status).toBe('failed');
+    // T-US013-2-rev1:BootResult 不再带 error 字段,只表达成败语义。
+    // UI 文案(splash-v1.0 §6)由 SplashScreen 默认值统一管理,bootGuard 不掺文案。
+    // 断言失败分支的形态:discriminated union 不再含 error 字段。
     if (result.status === 'failed') {
-      expect(result.error).toBeInstanceOf(Error);
-      expect(result.error.message).toMatch(/无法连接到服务器/);
+      expect(result).not.toHaveProperty('error');
     }
     expect(mockSignIn).toHaveBeenCalledTimes(2);
   });

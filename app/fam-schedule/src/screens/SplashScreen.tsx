@@ -38,7 +38,12 @@ export interface SplashScreenProps {
 
   /**
    * 自定义错误文案。默认走 splash-v1.0 §6 "无法连接到服务器,请检查网络后重试"。
-   * 给调用方一个逃生口:可以根据不同错误类型显示不同文案。
+   *
+   * MVP 不用(bootGuard 不再带 error 字段 — 见 T-US013-2 review Major #1 收敛),
+   * 但保留 prop 作为逃生口:
+   *   - 未来 i18n 时,调用方可传入翻译文案(如 `t('errors.networkFailed')`)
+   *   - 未来区分错误类型时,调用方可按错误种类传不同文案(如超时 / DNS / 服务端 5xx)
+   * 不传则走下方 DEFAULT_ERROR_MESSAGE 默认值。
    */
   errorMessage?: string;
 
