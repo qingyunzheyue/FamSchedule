@@ -763,7 +763,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: P0
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done(2026-09-22)
 - **Definition of Done**:
   - 顶部 Tab 切换:今天 / 本周 / 全部
   - 列表项显示:title / 时间 / 指派人头像 / 状态 badge

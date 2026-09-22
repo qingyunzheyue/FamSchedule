@@ -112,6 +112,9 @@ import {
   pullSince,
   subscribeFamily,
   _resetForTests,
+  getTasksSnapshot,
+  subscribeTasks,
+  setTasksAndNotify,
 } from '../src/lib/SyncManager';
 import {
   enqueueMutation,
@@ -490,6 +493,145 @@ describe('SyncManager.subscribeFamily', () => {
 
     // 仍然是 1 次(没有重复)
     expect(mockChannel).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * T-US002-1 新增 —— tasks snapshot + listener 集成测试
+ *
+ * 覆盖:
+ *   - pullSince 拉到 tasks 后,listener 被通知且 snapshot 更新
+ *   - applyOptimisticUpdate (enqueueAndApply checkin) 后,listener 被通知
+ *   - handleRealtimeChange(通过 mockChannel._emit 模拟 INSERT)后,listener 被通知
+ *   - _resetForTests 清空 listener + snapshot
+ *
+ * 注意:这些测试不重测 useTasks.test.tsx 里 listener 本身的语义,只验证
+ * SyncManager 各 setTasks 调用点已经统一改成 setTasksAndNotify,
+ * 行为与之前完全一致(只是额外触发 listener)。
+ */
+describe('SyncManager listener (T-US002-1)', () => {
+  it('pullSince merging incoming tasks notifies listeners and updates snapshot', async () => {
+    // 先订阅(让 currentFamilyId 被设)
+    await subscribeFamily(FAMILY_ID);
+    // 用 mock 替换 — pullSince 期间 tasks 表返回 task1
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'tasks') {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn(() => ({
+              gt: jest.fn(async () => ({ data: [task1], error: null })),
+            })),
+          })),
+        };
+      }
+      return {
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            gt: jest.fn(async () => ({ data: [], error: null })),
+          })),
+        })),
+      };
+    });
+
+    const cb = jest.fn();
+    subscribeTasks(cb);
+
+    await pullSince(null);
+
+    // listener 被通知(1 次,tasks 路径)
+    expect(cb).toHaveBeenCalled();
+    // snapshot 更新
+    expect(getTasksSnapshot().map((t) => t.id)).toContain(TASK_ID_1);
+  });
+
+  it('enqueueAndApply(checkin) notifies listeners via applyOptimisticUpdate', async () => {
+    await setTasks([task1]);
+
+    const cb = jest.fn();
+    subscribeTasks(cb);
+
+    const checkinMutation: PendingMutation = {
+      kind: 'checkin',
+      taskId: TASK_ID_1,
+      isMakeup: false,
+      queuedAt: Date.now(),
+    };
+    await enqueueAndApply(checkinMutation);
+
+    // listener 被通知(applyOptimisticUpdate 走的 setTasksAndNotify)
+    expect(cb).toHaveBeenCalled();
+    // snapshot 反映乐观更新
+    const snap = getTasksSnapshot();
+    expect(snap).toHaveLength(1);
+    expect(snap[0].id).toBe(TASK_ID_1);
+    expect(snap[0].completed_at).not.toBeNull();
+  });
+
+  it('enqueueAndApply(delete_task) notifies listeners via applyOptimisticUpdate', async () => {
+    await setTasks([task1, task2]);
+
+    const cb = jest.fn();
+    subscribeTasks(cb);
+
+    const deleteMutation: PendingMutation = {
+      kind: 'delete_task',
+      taskId: TASK_ID_1,
+      queuedAt: Date.now(),
+    };
+    await enqueueAndApply(deleteMutation);
+
+    expect(cb).toHaveBeenCalled();
+    const snap = getTasksSnapshot();
+    expect(snap).toHaveLength(1);
+    expect(snap[0].id).toBe(TASK_ID_2);
+  });
+
+  it('handleRealtimeChange(INSERT) notifies listeners', async () => {
+    await subscribeFamily(FAMILY_ID);
+
+    // 拿到 mockChannel 返回的 channel 对象,模拟 INSERT
+    const ch = mockChannel.mock.results[mockChannel.mock.results.length - 1].value as {
+      _emit: (p: unknown) => void;
+    };
+
+    const cb = jest.fn();
+    subscribeTasks(cb);
+
+    // 模拟 Supabase Realtime INSERT 事件
+    // handler 内部 void handleRealtimeChange(...) 是 async 链,需要 flush 几次
+    ch._emit({
+      eventType: 'INSERT',
+      new: { ...task1 },
+      old: {},
+    });
+    // 让 handler 内部的 await setTasksAndNotify 链有 time to resolve
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // listener 被通知(handleRealtimeChange → setTasksAndNotify)
+    expect(cb).toHaveBeenCalled();
+    // snapshot 包含新插入的 task
+    const snap = getTasksSnapshot();
+    expect(snap.map((t) => t.id)).toContain(TASK_ID_1);
+  });
+
+  it('_resetForTests clears tasks snapshot and listeners', async () => {
+    // 用 setTasksAndNotify 写 snapshot(setTasks 不更新 snapshot)
+    await setTasksAndNotify([task1]);
+    const cb = jest.fn();
+    subscribeTasks(cb);
+
+    expect(getTasksSnapshot()).toHaveLength(1);
+    expect(cb).toHaveBeenCalledTimes(0); // 没 notify 过
+
+    await _resetForTests();
+
+    expect(getTasksSnapshot()).toEqual([]);
+    // 旧的 cb 不应再被通知(reset 后 list 清空)
+    const beforeCount = cb.mock.calls.length;
+    // 重新塞一个 listener 让它收到 1 次通知,验证旧 cb 被清掉
+    await setTasks([task2]);
+    expect(cb.mock.calls.length).toBe(beforeCount);
   });
 });
 

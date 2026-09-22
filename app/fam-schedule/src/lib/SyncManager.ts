@@ -84,6 +84,94 @@ let isOnline = true;
  */
 const networkListeners = new Set<() => void>();
 
+// ---- Tasks snapshot + listener (T-US002-1 新增) ----
+
+/**
+ * 当前 LocalStore.tasks 的同步快照。pullSince / handleRealtimeChange /
+ * applyOptimisticUpdate 通过 setTasksAndNotify 写入时同步更新。
+ *
+ * 设计动机:LocalStore 自身无 listener(AsyncStorage 是 fire-and-forget),
+ * UI 不能响应 setTasks 变化。SyncManager 在 setTasks 调用的同一处维护
+ * tasksSnapshot + notify React hook(useTasks 内部 useSyncExternalStore 订阅)。
+ *
+ * 初始 []:首次启动时假设空。pullSince 完成后会写入真实数据,UI 第一帧
+ * 可能渲染空状态,然后很快刷新为真实任务列表。这是 brief 明确接受的简化。
+ */
+let tasksSnapshot: Task[] = [];
+
+/**
+ * 订阅 tasks 变化的 listener 集合。callback 无参 — 简单 notify 模式,
+ * listener 通过 getTasksSnapshot() 主动拿最新值(useSyncExternalStore 的契约)。
+ */
+const tasksListeners = new Set<() => void>();
+
+/**
+ * 同步取当前 tasks 快照。供 React hook(useTasks / useSyncExternalStore)在
+ * render 阶段同步读取 — 不能是 async,否则违反 useSyncExternalStore 契约。
+ */
+export function getTasksSnapshot(): Task[] {
+  return tasksSnapshot;
+}
+
+/**
+ * 订阅 tasks 变化。callback 无参 — 简单 notify 模式(listener 通过
+ * getTasksSnapshot() 拿最新值)。返回 unsubscribe 函数。
+ *
+ * 设计依据:useSyncExternalStore 的 subscribe 回调签名要求为 `(onChange) => () => void`
+ * —— 我们用最朴素的 notify,listener 自己拿快照。
+ */
+export function subscribeTasks(callback: () => void): () => void {
+  tasksListeners.add(callback);
+  return () => {
+    tasksListeners.delete(callback);
+  };
+}
+
+/**
+ * 内部:notify 所有 tasks listener。setTasksAndNotify 完成后调用。
+ *
+ * 容错:每个 listener 调用都包在 try/catch 里,防止一个 listener throw
+ * 拖垮其他 listener。这在 React 18+ 关键 —— useSyncExternalStore 的 listener
+ * 可能在 render commit 阶段被调用,throw 会让整个渲染失败。
+ *
+ * 不抛错 — listener 内部错误 console.error 让 listener 自己处理。
+ */
+function notifyTasksListeners(): void {
+  tasksListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SyncManager] tasks listener threw:', err);
+    }
+  });
+}
+
+/**
+ * setTasks + 维护 tasksSnapshot + notify listener 的复合 helper。
+ *
+ * 调用顺序很关键(brief 明确要求):
+ *   1. `await setTasks(tasks)` — 先持久化到 AsyncStorage(失败抛错)
+ *   2. `tasksSnapshot = tasks` — 再更新内存快照(同步,render 阶段可见)
+ *   3. `notifyTasksListeners()` — 最后通知 React,触发 useTasks 重渲染
+ *
+ * 顺序保证 listener 收到通知时,getTasksSnapshot() 已返回新值;
+ * 否则 listener 触发 re-render 但 React 看到的还是旧 snapshot,造成 stale 渲染。
+ *
+ * Export 原因(便于测试 + 未来扩展):
+ *   - jest 单测(__tests__/useTasks.test.tsx)直接验证 listener 通知契约,
+ *     不走 pullSince / subscribeFamily 那条需要 mock supabase 的路径
+ *   - 后续若新增模块需要直接写 tasks(罕见),可以走此 API 而非 raw setTasks
+ *     避免绕过 snapshot / listener 同步逻辑
+ *
+ * SyncManager 各处的 setTasks 调用点都改用它,统一持久化 / 快照 / 通知三步。
+ */
+export async function setTasksAndNotify(tasks: Task[]): Promise<void> {
+  await setTasks(tasks);
+  tasksSnapshot = tasks;
+  notifyTasksListeners();
+}
+
 /**
  * 去重 map(kind, taskId 或 template.id) → 当前 in-flight mutation。
  *
@@ -202,7 +290,7 @@ async function handleRealtimeChange(
   if (table === 'tasks') {
     const current = await getTasks();
     const merged = applyChangeToList<Task>(current, payload);
-    await setTasks(merged);
+    await setTasksAndNotify(merged);
   } else if (table === 'task_templates') {
     const current = await getTemplates();
     const merged = applyChangeToList<TaskTemplate>(current, payload);
@@ -329,7 +417,7 @@ async function applyOptimisticUpdate(mutation: PendingMutation): Promise<void> {
         completed_by: 'me', // 临时占位;realtime 会拿 server 真实值覆盖
         is_makeup: mutation.isMakeup,
       };
-      await setTasks(next);
+      await setTasksAndNotify(next);
     }
   } else if (mutation.kind === 'undo_checkin') {
     const tasks = await getTasks();
@@ -342,7 +430,7 @@ async function applyOptimisticUpdate(mutation: PendingMutation): Promise<void> {
         completed_by: null,
         is_makeup: false,
       };
-      await setTasks(next);
+      await setTasksAndNotify(next);
     }
   } else if (mutation.kind === 'create_task') {
     // create_task 实际上 mutation.template 是 TaskTemplate(US-001 现有流程传 template)
@@ -361,11 +449,11 @@ async function applyOptimisticUpdate(mutation: PendingMutation): Promise<void> {
     if (idx >= 0) {
       const next = tasks.slice();
       next[idx] = { ...next[idx], ...mutation.patch };
-      await setTasks(next);
+      await setTasksAndNotify(next);
     }
   } else if (mutation.kind === 'delete_task') {
     const tasks = await getTasks();
-    await setTasks(tasks.filter((t) => t.id !== mutation.taskId));
+    await setTasksAndNotify(tasks.filter((t) => t.id !== mutation.taskId));
   }
 }
 
@@ -514,7 +602,7 @@ export async function pullSince(lastSyncAt: number | null): Promise<PullStatus> 
     if (tasks && tasks.length > 0) {
       const current = await getTasks();
       const merged = mergeTasksById(current, tasks as Task[]);
-      await setTasks(merged);
+      await setTasksAndNotify(merged);
     }
   }
 
@@ -715,10 +803,15 @@ export function useSyncManager(familyId: string | null): SyncManagerState {
  *
  * 用法:重置模块级单例状态(订阅 / 当前 family / dedup / 监听器),
  * 让多个测试 case 互不污染。
+ *
+ * T-US002-1 扩展:同时清空 tasksSnapshot + tasksListeners,
+ * 避免上一个 test 的 listener 残留到下一个 test。
  */
 export async function _resetForTests(): Promise<void> {
   await unsubscribeAll();
   dedup.clear();
   networkListeners.clear();
+  tasksListeners.clear();
+  tasksSnapshot = [];
   isOnline = true;
 }
