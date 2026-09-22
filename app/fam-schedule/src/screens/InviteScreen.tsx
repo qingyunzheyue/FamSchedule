@@ -7,7 +7,8 @@
  *   3. 拿到 {code, expiresAt} → 展示 6 位数字 + 大字号 + mm:ss 倒计时
  *   4. 倒计时每秒 tick;到 0 时显示"已过期"+ "重新生成"按钮(自动 clear 当前 code)
  *   5. "重新生成"按钮可重复点击,触发新一轮 RPC
- *   6. "复制邀请码"按钮(Clipboard 留 TODO,不引依赖 — 见 handleCopy 注释)
+ *   6. 邀请码以 48px 大字号展示,下方文字提示"把码告诉配偶"(code 留在屏幕上,
+ *      创建者口头/微信/短信告知配偶,配偶在'加入家庭'页手动输入;本期**不接**剪贴板)
  *
  * 来源契约:
  *   - PRD US-012:创建者生成 6 位邀请码,配偶输入即可加入;10 分钟后过期
@@ -30,7 +31,9 @@
  *     family_members INSERT 处理,InviteScreen 只管"展示当前码"
  *
  * 严格 scope:
- *   - 不在这里接 Clipboard API(expo-clipboard)— 任务约束留 TODO
+ *   - 不在这里接 Clipboard API(expo-clipboard)— 上一版有 TODO + 假"已复制"反馈,
+ *     review 后移除整段复制按钮(copied state / handleCopy / Button 节点),避免
+ *     setTimeout 在 unmount 后泄漏 + 避免交付欺骗性 UI。详见 v1.0+us012-2-rev1。
  *   - 不在这里做配偶加入的 Realtime 监听(留给 family dashboard 重构)
  *   - 不在这里做"返回 pair-home"导航(路由由 expo-router stack 决定)
  */
@@ -60,7 +63,6 @@ export function InviteScreen(): React.JSX.Element {
   // UI 状态
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState<boolean>(false);
 
   // -------------------------------------------------------------------------
   // Auto-clear:过期 1s 后清掉 code,进入 idle 让用户点"重新生成"
@@ -72,7 +74,6 @@ export function InviteScreen(): React.JSX.Element {
     const t = setTimeout(() => {
       setCode(null);
       setExpiresAtMs(null);
-      setCopied(false);
     }, 1000);
     return () => clearTimeout(t);
   }, [countdown.expired, code]);
@@ -93,7 +94,6 @@ export function InviteScreen(): React.JSX.Element {
         if (Number.isFinite(expiresMs)) {
           setCode(result.code);
           setExpiresAtMs(expiresMs);
-          setCopied(false);
         } else {
           setError(`生成失败:服务端返回的过期时间无效(${result.expiresAt})`);
         }
@@ -110,26 +110,17 @@ export function InviteScreen(): React.JSX.Element {
     }
   }, [loading]);
 
-  const handleCopy = useCallback((): void => {
-    if (!code) return;
-    // TODO(T-US012-2 follow-up):接 expo-clipboard。任务约束本期不引依赖,
-    // UI 仍给"已复制"反馈(2s 自动消失),但实际未写入系统剪贴板 — 后续 task 接入。
-    // 参考实现:
-    //   import * as Clipboard from 'expo-clipboard';
-    //   await Clipboard.setStringAsync(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [code]);
-
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
 
   // 状态机 3 态:
   //   - idle    : 没码(初始 或 过期清除后)— show "生成邀请码"
-  //   - active  : 有码 + 未过期 — show 6 位码 + mm:ss + 复制按钮
+  //   - active  : 有码 + 未过期 — show 6 位码 + mm:ss + 口述分享提示
   //   - expired : 有码 + 已过期 — show "已过期" + 重新生成按钮
   // "重新生成" 按钮在 active / expired 都可见(用户主动放弃当前码的逃生口)
+  //
+  // 复制按钮在 v1.0+us012-2-rev1 已删除:详见顶部 JSDoc + review 记录。
 
   const showGenerateButton = !code && !loading;
   const showRegenerateButton = (code !== null || countdown.expired) && !loading;
@@ -189,9 +180,18 @@ export function InviteScreen(): React.JSX.Element {
             >
               {countdown.text}
             </Text>
-            <Button variant="outlined" onPress={handleCopy}>
-              <Text>{copied ? '已复制' : '复制邀请码'}</Text>
-            </Button>
+            {/* 口述分享提示:不接 Clipboard,留屏幕让用户自己念/截图/短信告知配偶
+                (设计 pair-create-v1.0 §3 active-state "把码告诉配偶" 指引文案) */}
+            <Text
+              fontSize="$body"
+              color="$textSecondary"
+              textAlign="center"
+              paddingHorizontal="$md"
+              marginTop="$sm"
+              accessibilityRole="text"
+            >
+              把这 6 位码告诉配偶,对方在「加入家庭」输入即可
+            </Text>
           </YStack>
         ) : null}
 

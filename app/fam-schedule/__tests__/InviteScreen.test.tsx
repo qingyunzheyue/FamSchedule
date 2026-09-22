@@ -202,6 +202,68 @@ describe('useInviteCountdown', () => {
   });
 });
 
+describe('useInviteCountdown unmount cleanup (T-US012-2-rev1)', () => {
+  it('clears the 1s interval on unmount — no setState warning after unmount', () => {
+    // Major #1 fix 后的契约:hook 必须清掉 setInterval,unmount 后不再调用 setNow,
+    // 否则 React 在 dev 模式会 warning "Can't perform a React state update on an
+    // unmounted component",prod 内存也会保留 setInterval closure(组件引用泄漏)。
+    //
+    // 之前的 InviteScreen.handleCopy setTimeout 漏 cleanup 是同一类 bug;
+    // useInviteCountdown 自身用 useEffect 返回 clearInterval 兜底(见源文件 §80-85),
+    // 本测试把这个契约钉死,后续若有人改成 setInterval 无 cleanup 会立刻红灯。
+    jest.useFakeTimers();
+    try {
+      const startMs = 1_700_000_000_000;
+      jest.setSystemTime(startMs);
+
+      // 捕获 React 的 dev warning(包含 unmounted state update 文案)
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      // 同步 store 一下原始实现,确保 spy 不影响其它测试
+      const originalImpl = consoleErrorSpy.getMockImplementation();
+
+      const probeRef = React.createRef<HookProbe>() as React.MutableRefObject<HookProbe>;
+      probeRef.current = { current: null };
+
+      let tree: TestRenderer.ReactTestRenderer | null = null;
+      act(() => {
+        tree = TestRenderer.create(
+          <HookHarness expiresAtMs={startMs + 60_000} probeRef={probeRef} />,
+        );
+      });
+
+      // sanity:interval 在跑,probe 已经收到首个非零 remainingMs
+      expect(probeRef.current!.current!.remainingMs).toBeGreaterThan(0);
+      expect(probeRef.current!.current!.expired).toBe(false);
+
+      // unmount → useEffect cleanup 应清掉 setInterval
+      act(() => {
+        tree!.unmount();
+      });
+      tree = null;
+
+      // 推 10s fake time:若 cleanup 失效,setInterval 每 1s 触发 setNow,
+      // 对已 unmount 的组件调用 → console.error(React warning)。
+      // 我们只关心"unmounted component state update"这条;
+      // 其它 console.error(例如 jest 自身的)不在断言范围。
+      act(() => {
+        jest.advanceTimersByTime(10_000);
+      });
+
+      const unmountWarnings = consoleErrorSpy.mock.calls.filter((call) => {
+        const first = call[0];
+        const msg = typeof first === 'string' ? first : '';
+        return msg.includes('unmounted') || msg.includes('memory leak');
+      });
+      expect(unmountWarnings).toHaveLength(0);
+
+      consoleErrorSpy.mockRestore();
+      if (originalImpl) consoleErrorSpy.mockImplementation(originalImpl);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('InviteScreen service contract', () => {
   it('FamilyService.createInvite is invoked with no arguments (matches SQL signature)', async () => {
     // 间接验证 InviteScreen 调 service 的契约:不传任何参数
