@@ -4,23 +4,30 @@ import { YStack, XStack, Text, Input, Button } from 'tamagui';
 import { useState } from 'react';
 
 import { useAuth } from '../../src/contexts/AuthContext';
-import { supabase } from '../../src/lib/supabase';
+import { useFamily } from '../../src/contexts/FamilyContext';
+import { acceptInvite as familyServiceAcceptInvite } from '../../src/services/FamilyService';
 
 /**
- * T-SETUP-9 — Pair-join (US-012 onboarding, step 2 of 2).
+ * T-US012-1 — Pair-join (US-012 onboarding, step 2 of 2).
  *
  * 用户输入 6 位邀请码,调 accept_invite RPC:
  *   - db-v1.1.sql §4.3:accept_invite(p_code TEXT) — 参数名是 p_code
  *   - 当前 user 已被写进对应 family 的 family_members 行
  *   - 返回新 family_id,Gate 检测到后 redirect
  *
- * 占位 — 真正的 input 校验、loading 状态、错误 toast 留给 US-012 详细实现。
+ * 与 T-SETUP-9 的差异(本任务重构):
+ *   - 不再直接调 supabase.rpc('accept_invite'),改走 FamilyService.acceptInvite()
+ *   - FamilyService 返回 discriminated union 区分 invalid_code / expired / already_in_family
+ *     → 这里按类型显示对应文案,不再只是 console.error 然后默默吞
+ *   - 成功后调 FamilyContext.refresh() + router.replace
  */
 export default function PairJoin(): React.JSX.Element {
   const router = useRouter();
   const { session } = useAuth();
+  const { refresh } = useFamily();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!session) {
     return <Redirect href="/" />;
@@ -30,22 +37,34 @@ export default function PairJoin(): React.JSX.Element {
     if (busy) return;
     const trimmed = code.trim().toUpperCase();
     if (trimmed.length === 0) return;
+
+    setError(null);
     setBusy(true);
     try {
-      // 强 cast CallableFunction 绕过 supabase-js typed Database 的
-      // Args narrowing quirk(见 src/lib/SyncManager.ts:425 注释)。
-      // 实际请求 payload { p_code: trimmed } 与 db RPC 签名一致。
-      const { error } = await (supabase.rpc as CallableFunction)(
-        'accept_invite',
-        { p_code: trimmed },
-      ) as { error: { message: string } | null };
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error('[pair-join] accept_invite rpc error:', error);
+      const result = await familyServiceAcceptInvite(trimmed);
+
+      if (result.status === 'joined') {
+        await refresh();
+        router.replace('/(main)/(home)');
         return;
       }
-      // 成功 — 主动跳到 home,Gate 的 pathname 监听器会重查 family
-      router.replace('/(main)/(home)');
+
+      if (result.status === 'already_in_family') {
+        // Pre-check 命中 → 跳 home
+        await refresh();
+        router.replace('/(main)/(home)');
+        return;
+      }
+
+      if (result.status === 'invalid_code') {
+        setError('邀请码无效,请检查后重试');
+        return;
+      }
+
+      if (result.status === 'expired') {
+        setError('邀请码已过期,请让配偶重新生成');
+        return;
+      }
     } finally {
       setBusy(false);
     }
@@ -95,6 +114,18 @@ export default function PairJoin(): React.JSX.Element {
             letterSpacing={4}
           />
         </XStack>
+
+        {error ? (
+          <Text
+            fontSize="$meta"
+            color="$error"
+            textAlign="center"
+            paddingHorizontal="$md"
+            marginTop="$sm"
+          >
+            {error}
+          </Text>
+        ) : null}
 
         <YStack gap="$md" width="100%" maxWidth={320} marginTop="$lg">
           <Button

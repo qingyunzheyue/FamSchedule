@@ -4,25 +4,32 @@ import { YStack, Text, Button } from 'tamagui';
 import { useState } from 'react';
 
 import { useAuth } from '../../src/contexts/AuthContext';
-import { supabase } from '../../src/lib/supabase';
+import { useFamily } from '../../src/contexts/FamilyContext';
+import { createFamily as familyServiceCreateFamily } from '../../src/services/FamilyService';
 
 /**
- * T-SETUP-9 — Pair-create (US-012 onboarding, step 1 of 2).
+ * T-US012-1 — Pair-create (US-012 onboarding, step 1 of 2).
  *
  * 首次登录 / 没家庭 → 用户选"创建家庭"或"输入邀请码"。
- * - 创建:db-v1.1.sql §4.1 的 create_family() RPC 不接受参数,内部创建
- *         families / family_members / family_settings 三张表的默认行。
- *         families 表本身无 name 列(只有 id / created_by / created_at),
- *         家庭名走 family_settings 默认行(US-012 改)。
- * - 加入:跳到 pair-join。
+ *
+ * 与 T-SETUP-9 的差异(本任务重构):
+ *   - 不再直接调 supabase.rpc('create_family'),改走 FamilyService.createFamily()
+ *     (FamilyService 负责 pre-check + 错误码映射 + cache)
+ *   - 成功后调 FamilyContext.refresh() 通知 Gate 重新决策路由
+ *     (替代原 pathname + refreshTick 监听机制)
+ *   - 错误展示分三类:
+ *       already_in_family → 自动跳 home(pre-check 命中,通常是 onboarding 与刷新竞态)
+ *       failed → 显示具体 reason(常见:"已在某 family 中"/ RLS 拒)
  *
  * 创建成功后主动 router.replace('/(main)/(home)') —
- * Gate 的 pathname 监听器会在路由变化时重新查 family_members,放行。
+ * Gate 的 family.state effect 看到 in_family 后放行。
  */
 export default function PairCreate(): React.JSX.Element {
   const router = useRouter();
   const { session } = useAuth();
+  const { refresh } = useFamily();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // 没 session → 直接踢回根路由(Gate 会再处理一次)
   if (!session) {
@@ -31,21 +38,29 @@ export default function PairCreate(): React.JSX.Element {
 
   async function handleCreate(): Promise<void> {
     if (busy) return;
+    setError(null);
     setBusy(true);
     try {
-      // `as never`:见 src/lib/SyncManager.ts:425 — supabase-js rpc() typed Database
-      // 在 object literal narrowing 上有 quirk,空对象 {} 也匹配不上 `undefined` 默认。
-      // 实际请求 payload 正确(RPC 无参),服务器能解析。
-      const { error } = await (supabase.rpc as CallableFunction)('create_family', {}) as {
-        error: { message: string } | null;
-      };
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error('[pair-create] create_family rpc error:', error);
+      const result = await familyServiceCreateFamily();
+
+      if (result.status === 'created') {
+        // 通知 FamilyContext 重拉 → Gate 看到 in_family → 跳 home
+        await refresh();
+        router.replace('/(main)/(home)');
         return;
       }
-      // 成功 — 主动跳到 home,Gate 的 pathname 监听器会重查 family
-      router.replace('/(main)/(home)');
+
+      if (result.status === 'already_in_family') {
+        // Pre-check 命中(竞态:onboarding 与 refresh 撞了)→ 也跳 home
+        await refresh();
+        router.replace('/(main)/(home)');
+        return;
+      }
+
+      // failed:把 reason 显示出来,用户能看明白(常见:RLS 拒)
+      // eslint-disable-next-line no-console
+      console.error('[pair-create] createFamily failed:', result.reason);
+      setError(`创建家庭失败:${result.reason}`);
     } finally {
       setBusy(false);
     }
@@ -71,6 +86,18 @@ export default function PairCreate(): React.JSX.Element {
         >
           创建一个家庭,或者让配偶输入邀请码加入。
         </Text>
+
+        {error ? (
+          <Text
+            fontSize="$meta"
+            color="$error"
+            textAlign="center"
+            paddingHorizontal="$md"
+            marginTop="$sm"
+          >
+            {error}
+          </Text>
+        ) : null}
 
         <YStack gap="$md" width="100%" maxWidth={320} marginTop="$lg">
           <Button

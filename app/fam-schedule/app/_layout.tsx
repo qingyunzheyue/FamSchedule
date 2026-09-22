@@ -5,12 +5,12 @@ import { TamaguiProvider, Theme } from 'tamagui';
 
 import config from '../src/theme/tamagui.config';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
+import { FamilyProvider, useFamily } from '../src/contexts/FamilyContext';
 import { SplashScreen } from '../src/screens/SplashScreen';
 import {
   init as initNotificationScheduler,
   requestNotificationPermission,
 } from '../src/lib/NotificationScheduler';
-import { supabase } from '../src/lib/supabase';
 
 // 思源黑体 / Noto Sans CJK SC — 3 字重,bundle 进 APK(~31MB,后续可子集化优化体积)
 import NotoSansSCRegular from '../assets/fonts/NotoSansSC-Regular.ttf';
@@ -57,9 +57,17 @@ export default function RootLayout() {
             - 启动时 AuthContext.initialize() 调 bootGuard(retry-once 启动守卫)
             - isLoading=true 时渲染 SplashScreen(loading 模式),避免闪一下未登录态的 stack
             - bootError 非空时 Gate 渲染 SplashScreen(error 模式)+ 重试按钮
-              (SplashScreen 抽到 src/screens/,见 splash-v1.0.md 设计契约) */}
+              (SplashScreen 抽到 src/screens/,见 splash-v1.0.md 设计契约)
+
+            T-US012-1:FamilyProvider 包在 AuthProvider 内、Gate 外。
+            - 依赖 useAuth().session 做 useEffect deps,session 变化自动重拉 family
+            - 把原本 Gate 内 inline 的 family_members 查询下沉到 FamilyService
+            - Gate 现在消费 useFamily().state,而非自己持 familyId / familyLoading
+        */}
         <AuthProvider>
-          <Gate />
+          <FamilyProvider>
+            <Gate />
+          </FamilyProvider>
         </AuthProvider>
       </Theme>
     </TamaguiProvider>
@@ -67,13 +75,11 @@ export default function RootLayout() {
 }
 
 /**
- * Gate — 在 AuthProvider 之下读 auth + family 状态,决定渲染 splash 还是真路由。
- * 必须独立组件:useAuth 必须在 AuthProvider 子树里才能调。
+ * Gate — 在 AuthProvider + FamilyProvider 下读 auth + family 状态,决定渲染 splash 还是真路由。
+ * 必须独立组件:useAuth / useFamily 必须在对应 Provider 子树里才能调。
  *
- * T-SETUP-9:除了 auth,还查 family_members 表判断用户是否已配对:
- *   - session 不存在 → 让 AuthProvider 的自动重连 effect 处理,这里只渲染 splash
- *   - session 有,但没 family_id → 跳 /(onboarding)/pair-create
- *   - session 有 + family_id 有 → 跳 /(main)/(home)
+ * T-SETUP-9(已重构):Gate 之前 inline 调 supabase.from('family_members') 查 family_id,
+ *   T-US012-1 起改成消费 useFamily().state — 状态来源单一(FamilyContext),刷新机制下沉。
  *
  * T-FIX-03:通知调度器拆两阶段。
  *   - `init()`(eager):mount 即触发,装 handler / 配 Android channel /
@@ -85,6 +91,10 @@ export default function RootLayout() {
  *     useEffect 早于 family 查询 commit → 弹框时序错误。本修复改用
  *     显式 import + 两个 useEffect 拆开,语义更清晰。
  *
+ * T-US012-1:FamilyProvider 自动追踪 session 变化拉 family,所以 Gate 不再需要
+ *   [session, pathname, refreshTick] 三重 deps 的 useEffect;改用单一 useFamily()。
+ *   family state 变化(onboarding 完成)→ 直接 router.replace 到 home。
+ *
  * T-US013-2:启动错误优先于其他 splash 状态显示。
  *   - bootError 非空 → 直接渲染 SplashScreen error 模式 + "重试" 按钮
  *     (auth 都没过 → 谈家庭/路由都没意义,直接阻塞错误占位等用户重试)
@@ -92,22 +102,18 @@ export default function RootLayout() {
  *   - 之前 splash 是 inline ActivityIndicator;现抽到 src/screens/SplashScreen.tsx,
  *     配 design-v1.0 §3 布局 + splash-v1.0.md §5 error 状态
  *
- * ⚠️ 本组件历史上有个 `bootError` state 实际只接 family 查询错误(变量名误导),
- *    已经在本任务里改名为 `familyQueryError`,语义清晰化;原 UI 行为不变 —
- *    family 查询错误时 familyId=null,自然走 onboarding 路径,用户能看到 pair-create 页。
+ * 状态决策顺序:
+ *   1. bootError → error splash
+ *   2. auth.isLoading || family.status === 'loading' → loading splash
+ *   3. !session → 渲染根 Stack(理论上 AuthProvider 自动重连,这只是兜底)
+ *   4. family.status === 'no_family' → 跳 onboarding
+ *   5. family.status === 'in_family' → 渲染主 Stack
  */
 function Gate() {
   const router = useRouter();
   const pathname = usePathname();
   const { isLoading, session, bootError, retryBoot } = useAuth();
-  const [familyId, setFamilyId] = useState<string | null>(null);
-  const [familyLoading, setFamilyLoading] = useState(true);
-  // 家庭查询错误(与 auth 启动错误是两条独立路径,各自 UI 路径不同)
-  const [familyQueryError, setFamilyQueryError] = useState<string | null>(null);
-  // 用一个递增的 key 触发手动刷新 — pair-create / pair-join
-  // 在 RPC 成功后 router.replace 会带动 pathname 变化,也会触发此 effect。
-  const [refreshTick, setRefreshTick] = useState(0);
-  const bumpRefresh = useCallback(() => setRefreshTick((n) => n + 1), []);
+  const family = useFamily();
 
   // T-FIX-03 (1/2):eager init — 装 handler / 配 channel / 注册 listener / cold-start
   // **不弹权限框**。失败仅 warn,不阻塞渲染(无权限仍可继续进入 app,只是不响通知)。
@@ -118,78 +124,34 @@ function Gate() {
     });
   }, []);
 
-  // 检测当前 user 是否在某个家庭里
-  useEffect(() => {
-    if (!session) {
-      setFamilyId(null);
-      setFamilyLoading(false);
-      return;
-    }
-
-    let mounted = true;
-    setFamilyLoading(true);
-
-    (async () => {
-      try {
-        // 显式 Row 泛型 — 避免 supabase-js 类型推导在 .maybeSingle() 上失败
-        const { data, error } = await supabase
-          .from('family_members')
-          .select('family_id')
-          .eq('user_id', session.user.id)
-          .maybeSingle<{ family_id: string }>();
-
-        if (!mounted) return;
-
-        if (error) {
-          // eslint-disable-next-line no-console
-          console.error('[Gate] family_members query error:', error);
-          setFamilyQueryError(error.message);
-          setFamilyId(null);
-        } else {
-          setFamilyId(data?.family_id ?? null);
-          setFamilyQueryError(null);
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[Gate] family_members query threw:', err);
-        if (mounted) {
-          setFamilyQueryError(err instanceof Error ? err.message : String(err));
-          setFamilyId(null);
-        }
-      } finally {
-        if (mounted) setFamilyLoading(false);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, [session, pathname, refreshTick]);
-
   // T-FIX-03 (2/2):gated permission request — 仅在用户已登录且加入/创建家庭后弹框。
-  // 双重保险:`session` 防 anon sign-in 抢跑,`familyId` 防 onboarding 阶段抢跑。
-  // 典型 UX 序列:用户在 pair-create 提交 RPC → router.replace → familyId
-  // effect 重查 → familyId 落定 → 本 effect 触发 → 弹原生权限框(用户此时
-  // 看到任务首页 push 完成,理解通知的用途)。
+  // 双重保险:`session` 防 anon sign-in 抢跑,`family.status === 'in_family'` 防 onboarding 阶段抢跑。
+  // 典型 UX 序列:用户在 pair-create 提交 RPC → FamilyContext.refresh() → family 状态切到 in_family
+  // → 本 effect 触发 → 弹原生权限框(用户此时看到任务首页 push 完成,理解通知的用途)。
+  const inFamilyId = family.state.status === 'in_family' ? family.state.value.family.id : null;
   useEffect(() => {
-    if (!session || !familyId) return;
+    if (!session || !inFamilyId) return;
     requestNotificationPermission().catch((e) => {
       // eslint-disable-next-line no-console
       console.warn('[Gate] NotificationScheduler requestNotificationPermission failed:', e);
     });
-  }, [session, familyId]);
+  }, [session, inFamilyId]);
 
-  // 引导完成(创建或加入家庭)后,familyId 变化 → 主动 push 到 home
+  // 引导完成(创建或加入家庭)后,family 状态切到 in_family → 主动 push 到 home
   // Expo Router 用 router.replace 而非 Redirect 组件,以保证
   // onboarding stack 被弹出(用户不会 back 回 pair-create)。
+  //
+  // 注意:依赖 pathname 避免重复 push(每次路由变化 router.replace 会再触发,但已经在 home 时
+  // pathname 已经是 /(main)/(home) → 不会循环)。
   useEffect(() => {
-    if (isLoading || familyLoading) return;
+    if (isLoading) return;
     if (!session) return; // 等自动 anon sign-in
-    if (!familyId) return; // 还在 onboarding
+    if (family.state.status !== 'in_family') return; // 还在 onboarding / loading
 
-    // 有家庭了 → 跳到任务 tab 首页
-    router.replace('/(main)/(home)');
-  }, [isLoading, familyLoading, session, familyId, router]);
+    if (pathname !== '/(main)/(home)') {
+      router.replace('/(main)/(home)');
+    }
+  }, [isLoading, session, family.state, pathname, router]);
 
   // T-US013-2:启动错误优先于其他 splash 状态显示
   // (auth 都没过 → 谈家庭/路由都没意义,直接阻塞错误占位等用户重试)
@@ -200,7 +162,7 @@ function Gate() {
   }
 
   // 任一加载未完成:显示 splash(loading 模式)
-  if (isLoading || familyLoading) {
+  if (isLoading || family.state.status === 'loading') {
     return <SplashScreen />;
   }
 
@@ -220,7 +182,7 @@ function Gate() {
   }
 
   // 没家庭 → 强制 onboarding
-  if (!familyId) {
+  if (family.state.status === 'no_family') {
     return <Redirect href="/(onboarding)/pair-create" />;
   }
 
