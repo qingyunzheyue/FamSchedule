@@ -1,35 +1,21 @@
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { YStack, Text } from 'tamagui';
+import { CreateTaskScreen } from '../../../src/screens/CreateTaskScreen';
 
 /**
- * T-SETUP-9 — Create task placeholder.
+ * T-US001-1 — 创建任务路由。
  *
- * US-003 任务创建会填这里:标题 / 描述 / 到期时间 / 指派给配偶或我 / 提醒规则。
+ * thin wrapper:expo-router stack 决定路由;此文件只负责把 SafeArea 容器包
+ * 在 <CreateTaskScreen /> 外,让屏幕不必关心 inset(top 由 stack header
+ * 处理,bottom 由 SafeAreaView edges=['bottom'] 兜底)。
+ *
+ * 设计:
+ *   - 业务逻辑全在 src/screens/CreateTaskScreen.tsx(纯逻辑抽到 lib/createTaskForm.ts)
+ *   - 本 wrapper 不做 useEffect / 副作用,纯渲染,便于 jest 单测不经过 router 触发
  */
-export default function TaskCreate(): React.JSX.Element {
+export default function TaskCreateRoute(): React.JSX.Element {
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
-      <YStack
-        flex={1}
-        padding="$lg"
-        gap="$md"
-        backgroundColor="$background"
-      >
-        <Text
-          fontSize="$title"
-          fontFamily="$heading"
-          fontWeight="semibold"
-          color="$textPrimary"
-        >
-          新建任务
-        </Text>
-        <Text fontSize="$body" color="$textSecondary">
-          任务标题、提醒时间、指派对象。
-        </Text>
-        <Text fontSize="$meta" color="$textTertiary">
-          由 US-003 接入(标题输入 / 时间 picker / 家庭成员选择 / 提交 RPC)。
-        </Text>
-      </YStack>
+      <CreateTaskScreen />
     </SafeAreaView>
   );
 }
