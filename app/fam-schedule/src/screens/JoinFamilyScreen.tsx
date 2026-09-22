@@ -84,24 +84,12 @@ import { useFamily } from '../contexts/FamilyContext';
 export function JoinFamilyScreen(): React.JSX.Element {
   const router = useRouter();
   const { refresh } = useFamily();
-  const { digits, setDigit, setAllDigits, handlePaste, clear, refs, isComplete } =
+  const { digits, setDigit, setAllDigits, clear, refs, isComplete } =
     useCodeInput();
 
   // UI 本地状态机(input / submitting / submitted)
   const [phase, setPhase] = useState<SubmitJoinPhase>('input');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // -------------------------------------------------------------------
-  // Auto-submit:6 位全填 → 自动调 accept_invite
-  // -------------------------------------------------------------------
-
-  useEffect(() => {
-    if (!isComplete || phase !== 'input') return;
-    void doSubmit();
-    // doSubmit 是 useCallback 闭包,deps 由它内部持有;
-    // 这里只依赖 isComplete 触发(auto-submit 是事件不是依赖链)。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isComplete]);
 
   // -------------------------------------------------------------------
   // Submit handler — 调 submitJoinCode(便于单测) + 副作用
@@ -164,6 +152,16 @@ export function JoinFamilyScreen(): React.JSX.Element {
   }, [phase, digits, refresh, router, clear]);
 
   // -------------------------------------------------------------------
+  // Auto-submit:6 位全填 → 自动调 accept_invite
+  // (effect 在 doSubmit 之后声明,deps 数组才能引用 doSubmit 不触发 TDZ)
+  // -------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!isComplete || phase !== 'input') return;
+    void doSubmit();
+  }, [isComplete, phase, doSubmit]);
+
+  // -------------------------------------------------------------------
   // Focus helper
   // -------------------------------------------------------------------
 
@@ -213,17 +211,6 @@ export function JoinFamilyScreen(): React.JSX.Element {
       if (result.focusPrev) focusCell(i - 1);
     },
     [digits, setDigit, focusCell],
-  );
-
-  const onPaste = useCallback(
-    (text: string) => {
-      handlePaste(text);
-      // 粘贴后焦点跳到第一个空格(或最后一格)
-      const next = handlePasteResult(text);
-      const lastFilled = next.findIndex((d) => d === '');
-      focusCell(lastFilled === -1 ? CODE_LENGTH - 1 : lastFilled);
-    },
-    [handlePaste, focusCell],
   );
 
   // -------------------------------------------------------------------
@@ -379,21 +366,4 @@ export function JoinFamilyScreen(): React.JSX.Element {
       </YStack>
     </SafeAreaView>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Local helpers
-// ---------------------------------------------------------------------------
-
-/**
- * 计算 handlePaste 后的结果数组(不直接复用 handlePaste 以免双调用 setDigits)。
- * 单独算一遍 next 用于决定焦点跳到哪个 cell。
- */
-function handlePasteResult(pasted: string): string[] {
-  const sanitized = pasted.replace(/\D/g, '');
-  const next = Array(CODE_LENGTH).fill('');
-  for (let i = 0; i < CODE_LENGTH && i < sanitized.length; i++) {
-    next[i] = sanitized[i];
-  }
-  return next;
 }
