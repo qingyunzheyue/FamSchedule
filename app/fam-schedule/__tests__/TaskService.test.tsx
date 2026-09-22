@@ -357,6 +357,21 @@ describe('TaskService.createTask — happy path', () => {
     expect(insertPayloadSpy.mock.calls[0][0].task_time).toBe('20:00');
   });
 
+  it('createTask normalizes empty taskTime="" to null (defensive guard, Major #1)', async () => {
+    // 防御:即使 validateForm 漏拦(选了 am/pm),空串 "" 也不应泄漏到 Postgres TIME 列
+    // (DB 会报 invalid input syntax for type time: "")
+    const { insertPayloadSpy } = setupHappyPath(sampleRow);
+
+    await createTask({
+      title: 't',
+      taskDate: '2026-09-22',
+      taskTime: '',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(insertPayloadSpy.mock.calls[0][0].task_time).toBeNull();
+  });
+
   it('assigneeId=spouse is forwarded verbatim', async () => {
     const { insertPayloadSpy } = setupHappyPath(sampleRow);
 

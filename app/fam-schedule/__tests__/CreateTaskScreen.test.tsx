@@ -329,13 +329,39 @@ describe('validateForm', () => {
     expect(validateForm(form)).toBeNull();
   });
 
-  it('returns title-required fallback when assigneeId is empty (defensive兜底)', () => {
+  it('returns "请选择指派人" when assigneeId is empty (defensive兜底)', () => {
     // UI 默认填 creator,理论上不到这;但 service 必须有非空 assigneeId
+    // (review Major #1 附带修 Minor #3 文案对齐:原本误用 titleRequired)
     const form = makeBaseForm({
       title: 't',
       assigneeId: '',
     });
-    expect(validateForm(form)).toBe(VALIDATION_MESSAGES.titleRequired);
+    expect(validateForm(form)).toBe(VALIDATION_MESSAGES.assigneeRequired);
+  });
+
+  it('rejects timeChip="am" with timeNotSupported (Major #1: 防 am/pm → 空串 → Postgres TIME 拒)', () => {
+    const form = makeBaseForm({
+      title: '喂奶粉',
+      timeChip: 'am',
+    });
+    expect(validateForm(form)).toBe(VALIDATION_MESSAGES.timeNotSupported);
+  });
+
+  it('rejects timeChip="pm" with timeNotSupported (Major #1)', () => {
+    const form = makeBaseForm({
+      title: '喂奶粉',
+      timeChip: 'pm',
+    });
+    expect(validateForm(form)).toBe(VALIDATION_MESSAGES.timeNotSupported);
+  });
+
+  it('passes when timeChip="none" (空串 resolve → null 路径)', () => {
+    const form = makeBaseForm({
+      title: '喂奶粉',
+      timeChip: 'none',
+      taskTime: '',
+    });
+    expect(validateForm(form)).toBeNull();
   });
 });
 
@@ -480,11 +506,13 @@ describe('option arrays', () => {
     expect(SHARE_OPTIONS).toHaveLength(2);
   });
 
-  it('VALIDATION_MESSAGES has all 5 keys defined (no undefined values)', () => {
+  it('VALIDATION_MESSAGES has all keys defined (no undefined values)', () => {
     expect(VALIDATION_MESSAGES.titleRequired).toBeTruthy();
     expect(VALIDATION_MESSAGES.dateRequired).toBeTruthy();
     expect(VALIDATION_MESSAGES.dateFormat).toBeTruthy();
     expect(VALIDATION_MESSAGES.timeFormat).toBeTruthy();
+    expect(VALIDATION_MESSAGES.timeNotSupported).toBeTruthy(); // Major #1 新增
+    expect(VALIDATION_MESSAGES.assigneeRequired).toBeTruthy(); // 附带修 Minor #3
     expect(VALIDATION_MESSAGES.recurrenceNotSupported).toBeTruthy();
     expect(VALIDATION_MESSAGES.coExecutorNotSupported).toBeTruthy();
   });

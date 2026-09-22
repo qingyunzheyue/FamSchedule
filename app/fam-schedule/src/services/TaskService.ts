@@ -130,11 +130,21 @@ export async function createTask(input: CreateTaskInput): Promise<CreateTaskResu
   // 3. 构造 INSERT payload
   // SDK 在 typed Database 下 narrow 有 quirk,用 `as never` cast 规避
   // (对齐 FamilyService.createFamily §194 / SyncManager.executeOnServer §442 模式)。
+  //
+  // ⚠️ review Major #1 防御层:`taskTime` 不仅 null/undefined 要落 null,空串 `""`
+  //    也必须落 null(空串落到 Postgres TIME 列会被 server 报
+  //    `invalid input syntax for type time: ""`)。
+  //    主要防御是 createTaskForm.validateForm 拦截 am/pm + 空 taskTime 走 none;
+  //    这里 guard 是最后一道兜底 — 即使 UI 层有 path 让 '' 漏到这里,也不写脏数据。
+  const taskTime: string | null =
+    input.taskTime !== undefined && input.taskTime !== null && input.taskTime !== ''
+      ? input.taskTime
+      : null;
   const payload = {
     family_id: familyId,
     title: input.title,
     task_date: input.taskDate,
-    task_time: input.taskTime ?? null,
+    task_time: taskTime,
     assignee_id: input.assigneeId,
     co_executor_ids: [] as string[],
     is_shared_view: input.isSharedView ?? false,

@@ -33,6 +33,10 @@ export const VALIDATION_MESSAGES = {
   dateRequired: '日期不能为空',
   dateFormat: '日期格式不对',
   timeFormat: '时间格式不对',
+  /** review Major #1:am/pm 暂未实现(本期不支持)— 拦截防空串泄漏到 Postgres TIME 列 */
+  timeNotSupported: '暂不支持"上午/晚上"快速选项,请用自定义时间',
+  /** 兜底文案:UI 默认填 creator,理论上不到这;但若走空显示这条 */
+  assigneeRequired: '请选择指派人',
   recurrenceNotSupported: '周期任务即将推出,敬请期待',
   coExecutorNotSupported: '共同执行人即将推出',
 } as const;
@@ -181,8 +185,14 @@ export function resolveTaskDate(
 /**
  * 给定 chip 值,导出最终的 taskTime:
  *   - 'none':null(给后端写 NULL = 不指定时间)
- *   - 'am' / 'pm':占位(本期 toast + 不提交,但 UI 渲染给用户看;resolve 时返回 '')
+ *   - 'am' / 'pm':占位(本期未实现,validateForm 拦截不允许提交 → 实际不会走到 resolve)
  *   - 'custom':返回 formState.taskTime.trim()(格式校验交给 validateForm)
+ *
+ * ⚠️ review Major #1:历史版本 'am' / 'pm' 返回 `""`,原意"让 UI 看到 reject",
+ *    实际 validateForm 没拦截、空串 `""` 原样塞进 payload,Postgres TIME 列拒绝。
+ *    修复:validateForm 已拒绝 am/pm 选择 → resolveTaskTime 在合法流程里不会被
+ *    用到 am/pm 分支。下方 `case 'am'/'pm'` 保留 `""` 返回作为 fallback
+ *    (validateForm 漏拦时 TaskService 仍兜底 null),但不依赖。
  */
 export function resolveTaskTime(
   formState: Pick<CreateTaskFormState, 'timeChip' | 'taskTime'>,
@@ -194,7 +204,9 @@ export function resolveTaskTime(
       return formState.taskTime.trim();
     case 'am':
     case 'pm':
-      // 本期未实现 am/pm 详细时间映射;UI 选中时直接走 reject,resolve 不产出有效值
+      // validateForm 已拦截;此处 fallback 返回 '' 而非 null,
+      // 是为了让 toCreateTaskInput 在「validateForm 漏拦」(理论不应发生)
+      // 时仍把问题暴露给 TaskService 防御层(空串 → null)而不是悄悄写 null。
       return '';
     default:
       return null;
@@ -210,8 +222,10 @@ export function resolveTaskTime(
  *
  * 顺序(从上到下短路):
  *   1. 标题非空
- *   2. 日期非空 + YYYY-MM-DD 格式
- *   3. 时间:若 chip=custom → HH:MM 格式
+ *   2. 时间:chip=am/pm → 拦截(本期不支持,防空串泄漏到 Postgres TIME 列)
+ *   3. 时间:chip=custom → HH:MM 格式
+ *   4. 日期非空 + YYYY-MM-DD 格式
+ *   5. assigneeId 非空(UI 兜底)
  *
  * ⚠️ 周期:不在这里拒绝 — 周期由 doSubmit 单独 toast(用户主动选了非 none)
  *    时直接不调 TaskService,而不是 validateForm false。
@@ -222,18 +236,19 @@ export function resolveTaskTime(
  *    - assigneeId 必填 — 但实际 UI 默认填 creator,不会空,这里兜底
  *    - description 无校验(可选)
  *    - share 无校验(默认 'private',无非法值)
+ *
+ * ⚠️ review Major #1 修复:之前 am/pm 走 '' resolveTaskTime → '' 落到 payload →
+ *    Postgres TIME 列拒绝。本拦截保证 am/pm 在 validateForm 这一层就被拒,
+ *    UI 上看到红字 + 保存按钮 disable(review round 2 验收点)。
  */
 export function validateForm(form: CreateTaskFormState): string | null {
   if (form.title.trim().length === 0) {
     return VALIDATION_MESSAGES.titleRequired;
   }
 
-  const resolvedDate = resolveTaskDate(form);
-  if (resolvedDate.length === 0) {
-    return VALIDATION_MESSAGES.dateRequired;
-  }
-  if (!isValidDate(resolvedDate)) {
-    return VALIDATION_MESSAGES.dateFormat;
+  // review Major #1:am/pm 暂不支持 — 拦截避免 resolve 出 '' 落到 Postgres TIME 列
+  if (form.timeChip === 'am' || form.timeChip === 'pm') {
+    return VALIDATION_MESSAGES.timeNotSupported;
   }
 
   if (form.timeChip === 'custom') {
@@ -244,9 +259,17 @@ export function validateForm(form: CreateTaskFormState): string | null {
     // custom chip 但 time 为空 → 等同"不指定"(静默 fall back to null)
   }
 
+  const resolvedDate = resolveTaskDate(form);
+  if (resolvedDate.length === 0) {
+    return VALIDATION_MESSAGES.dateRequired;
+  }
+  if (!isValidDate(resolvedDate)) {
+    return VALIDATION_MESSAGES.dateFormat;
+  }
+
   if (form.assigneeId.trim().length === 0) {
     // 兜底:UI 默认填 creator,理论上不到这
-    return VALIDATION_MESSAGES.titleRequired; // 复用"必填"文案,避免再加一条
+    return VALIDATION_MESSAGES.assigneeRequired; // review:文案对齐(原误用 titleRequired)
   }
 
   return null;
