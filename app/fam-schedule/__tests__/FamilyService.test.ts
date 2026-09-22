@@ -24,6 +24,7 @@
 import {
   createFamily,
   acceptInvite,
+  createInvite,
   getMyFamily,
   _resetForTests,
 } from '../src/services/FamilyService';
@@ -463,5 +464,54 @@ describe('FamilyService.getMyFamily', () => {
 describe('FamilyService._resetForTests', () => {
   it('clears module-level cache without throwing', () => {
     expect(() => _resetForTests()).not.toThrow();
+  });
+});
+
+describe('FamilyService.createInvite', () => {
+  it('returns created{code, expiresAt} on success', async () => {
+    // create_invite SQL signature is `()` — no args, server-side uses family_members + auth.uid()
+    // Returns single row {code TEXT, expires_at TIMESTAMPTZ}
+    const futureIso = '2026-09-22T10:10:00.000Z';
+    mockRpc.mockResolvedValue({
+      data: { code: '482917', expires_at: futureIso },
+      error: null,
+    });
+
+    const result = await createInvite();
+
+    expect(result.status).toBe('created');
+    if (result.status === 'created') {
+      expect(result.code).toBe('482917');
+      expect(result.expiresAt).toBe(futureIso);
+    }
+    // SQL signature is no-args — 关键签名校验,避免 drift
+    expect(mockRpc).toHaveBeenCalledWith('create_invite');
+  });
+
+  it('returns failed{reason} when RPC errors', async () => {
+    // 触发场景:caller 不在 family → SQL raise 'Caller is not in any family'
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { message: 'Caller is not in any family', name: 'PostgrestError' },
+    });
+
+    const result = await createInvite();
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('Caller is not in any family');
+    }
+  });
+
+  it('returns failed{reason} when RPC returns null data (no row)', async () => {
+    // 兜底:RPC 没抛错但返回 data=null(理论上 SQL 总会 RETURN QUERY,这里保底)
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const result = await createInvite();
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('no data');
+    }
   });
 });

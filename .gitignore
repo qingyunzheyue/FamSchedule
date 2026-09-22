@@ -40,6 +40,8 @@ node_modules/
 **/.expo/
 .expo-shared/
 **/.expo-shared/
+.tamagui/
+**/.tamagui/
 dist/
 web-build/
 expo-env.d.ts

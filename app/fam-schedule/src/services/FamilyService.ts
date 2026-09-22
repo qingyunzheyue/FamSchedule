@@ -6,14 +6,16 @@
  *                          创建新 family + creator 行 + 默认 family_settings
  *   2. acceptInvite(code)— 调 supabase.rpc('accept_invite', { p_code })(db-v1.1.sql §4.3),
  *                          把当前 user 加入 family + 标记 invite_code used
- *   3. getMyFamily()     — 查 family_members + families + 同 family 所有 members,
+ *   3. createInvite()    — 调 supabase.rpc('create_invite')(db-v1.1.sql §4.2,无参),
+ *                          生成 6 位数字邀请码 + 10 分钟过期时间戳(ADR-004)
+ *   4. getMyFamily()     — 查 family_members + families + 同 family 所有 members,
  *                          返回 FamilyContextValue | null
- *   4. _resetForTests()  — 清 module-level cache(给 jest 用,与 AuthService 对齐)
+ *   5. _resetForTests()  — 清 module-level cache(给 jest 用,与 AuthService 对齐)
  *
  * 设计依据:
  *   - RLS deny-by-default(arch-v1.0 §10.4):所有 family 维度写必须走 RPC,
  *     直接 .from('families').insert() 会被 RLS 拒绝。
- *     所以 createFamily / acceptInvite 走 RPC,读(getMyFamily)走 .from() + RLS 放行。
+ *     所以 createFamily / acceptInvite / createInvite 走 RPC,读(getMyFamily)走 .from() + RLS 放行。
  *   - ADR-004(Invite codes):10 分钟过期 + atomic UPDATE,客户端只发码,过期判定服务端做
  *   - 单一职责:本模块只管 family 维度;AuthService 管 auth,SyncManager 管 Realtime + 离线队列,
  *     LocalStore 管本地缓存。三者解耦,FamilyContext(React 层)只调本模块。
@@ -36,10 +38,18 @@
  *       { status: 'invalid_code' }                    — 邀请码无效/不存在(由服务端 error 命中)
  *       { status: 'expired' }                         — 邀请码已过期
  *       { status: 'already_in_family' }               — 调用方已有 family
+ *   - createInvite:
+ *       { status: 'created'; code; expiresAt }        — 成功
+ *       { status: 'failed'; reason }                  — RPC 抛错(常见:Caller not in family)
  *
  * ⚠️ FamilyRow 当前没有 name 列(families 表只有 id/created_by/created_at,见 database.ts §41-45),
  *    家庭名未来走 family_settings 默认行(US-012 后续任务)。所以 familyName 暂时恒为 '我的家庭',
  *    是已知的设计债,不是 bug。
+ *
+ * ⚠️ create_invite SQL 签名是 **无参**(`create_invite()`)— db-v1.1.sql §4.2 / database.ts §163
+ *    `CreateInviteArgs = undefined`;family_id 由服务端用 `auth.uid()` 查 family_members 推导出。
+ *    TTL 也是服务端硬编码 `now() + interval '10 minutes'`,客户端不能 override。
+ *    任务 brief 里写的 `{p_family_id, p_ttl_minutes?}` 与 schema 不一致 — 以 db-v1.1.sql 为准。
  */
 
 import { supabase } from '../lib/supabase';
@@ -74,6 +84,11 @@ export type AcceptInviteResult =
   | { status: 'expired' }
   | { status: 'already_in_family' };
 
+/** createInvite 的结构化返回。 */
+export type CreateInviteResult =
+  | { status: 'created'; code: string; expiresAt: string }
+  | { status: 'failed'; reason: string };
+
 // =====================================================================
 // Module state (singleton cache)
 // =====================================================================
@@ -90,6 +105,61 @@ let cachedFamily: FamilyRow | null = null;
  * 但缓存住免得每次都查 family_members)。
  */
 let cachedFamilyId: string | null = null;
+
+// =====================================================================
+// 5. createInvite (T-US012-2 新增)
+// =====================================================================
+
+/**
+ * 生成一个新的 6 位数字邀请码(US-012,ADR-004)。
+ *
+ * SQL 签名(db-v1.1.sql §4.2):`create_invite()` **无参**。
+ *   - family_id 由服务端用 `auth.uid()` 查 family_members 推导(SELECT family_id ... LIMIT 1)
+ *   - expires_at 硬编码 `now() + interval '10 minutes'`,客户端不可 override
+ *   - 返回单行 `{code TEXT, expires_at TIMESTAMPTZ}`
+ *
+ * 错误码映射(db-v1.1.sql §4.2 + 测试已知场景):
+ *   - "Caller is not in any family" → failed(reason 透传,UI 显示「你还没加入家庭」)
+ *   - "Not authenticated"           → failed(同上传)
+ *   - "Failed to generate unique invite code after 5 attempts" → failed(理论上概率极低)
+ *   - 其他 → failed(reason = error.message)
+ *
+ * 不抛错。
+ *
+ * ⚠️ 与 `acceptInvite` / `createFamily` 区别:本函数**没有 pre-check**(因为没输入参数,
+ *    family_id 完全服务端推导;调用方已经在 family 里由 Gate 保证了 — 在 in_family 状态
+ *    下才进 InviteScreen 路由,FamilyContext.refresh 触发后 family.status = in_family)。
+ *    跳过 pre-check 让 RPC 直接做 authoritative 判断,避免双重查表。
+ */
+export async function createInvite(): Promise<CreateInviteResult> {
+  // supabase-js typed Database 在 RPC 上有 Args narrowing quirk,
+  // 按 SyncManager.ts:425 / acceptInvite 模式用 `as CallableFunction` cast 规避。
+  const { data, error } = await (supabase.rpc as CallableFunction)(
+    'create_invite',
+  ) as {
+    data: { code: string; expires_at: string } | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[FamilyService] create_invite rpc error:', error.message);
+    return { status: 'failed', reason: error.message };
+  }
+
+  if (!data) {
+    // 兜底:SQL 总会 RETURN QUERY,data 为 null 不太可能出现 — 但保留 explicit 防御
+    // eslint-disable-next-line no-console
+    console.warn('[FamilyService] create_invite rpc returned no data');
+    return { status: 'failed', reason: 'create_invite rpc returned no data' };
+  }
+
+  return {
+    status: 'created',
+    code: data.code,
+    expiresAt: data.expires_at,
+  };
+}
 
 // =====================================================================
 // 1. createFamily
@@ -321,3 +391,25 @@ export function _resetForTests(): void {
   cachedFamily = null;
   cachedFamilyId = null;
 }
+
+// =====================================================================
+// 6. FamilyService namespace(T-US012-2 新增,UI 层 sugar 入口)
+// =====================================================================
+
+/**
+ * `FamilyService` namespace — 把模块级函数包装成对象,便于 UI 层(尤其 React 组件)import。
+ *
+ * 为什么有"命名函数 + namespace 对象"双形态:
+ *   - 单元测试 / 单函数调用方走命名 export(`import { createInvite } from ...`)
+ *   - React 组件 / UI 层走 namespace(`import { FamilyService } from ...`,
+ *     写 `FamilyService.createInvite()` 更接近 OOP 调用风格,且未来方便整组替换 mock)
+ *
+ * 这是 UI 友好的 thin wrapper,**不持有任何状态**(状态仍在 module-level cache),
+ * 也不参与错误处理(继承各函数的 discriminated union 返回)。
+ */
+export const FamilyService = {
+  createFamily,
+  acceptInvite,
+  createInvite,
+  getMyFamily,
+};

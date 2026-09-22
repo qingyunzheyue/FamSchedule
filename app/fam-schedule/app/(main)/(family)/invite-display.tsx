@@ -1,38 +1,30 @@
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { YStack, Text } from 'tamagui';
+import { Stack } from 'expo-router';
+
+import { InviteScreen } from '../../../src/screens/InviteScreen';
 
 /**
- * T-SETUP-9 — Invite display placeholder.
+ * T-US012-2 — Invite display route(family tab → 邀请配偶页)。
  *
- * US-012 接入:
- *   - 6 位邀请码 + 二维码
- *   - "复制邀请码"按钮(系统剪贴板)
- *   - 邀请码 24h 过期倒计时
+ * 来源契约:
+ *   - T-SETUP-9 阶段是占位文字,US-012 接入后跳到 src/screens/InviteScreen。
+ *   - SQL `create_invite()` 无参(auth.uid() 内部推导 family),无需 client 传 familyId。
+ *   - Gate 已经保证 in_family 状态才能进 (main)/* 路由,这里无需额外 family check。
+ *
+ * Stack.Screen options:
+ *   - title:栈标题(中文,与 pair-create 风格对齐)
+ *   - headerBackTitle:iOS back 按钮文案(短,设计语言一致)
+ *   - 主题色来自 (main)/(family)/_layout.tsx 的 screenOptions(NotoSansSC_Semibold 17)
  */
-export default function InviteDisplay(): React.JSX.Element {
+export default function InviteDisplayRoute(): React.JSX.Element {
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
-      <YStack
-        flex={1}
-        padding="$lg"
-        gap="$md"
-        backgroundColor="$background"
-      >
-        <Text
-          fontSize="$title"
-          fontFamily="$heading"
-          fontWeight="semibold"
-          color="$textPrimary"
-        >
-          邀请配偶
-        </Text>
-        <Text fontSize="$body" color="$textSecondary">
-          把 6 位邀请码或二维码发给配偶,他在 onboarding 步骤输入即可加入。
-        </Text>
-        <Text fontSize="$meta" color="$textTertiary">
-          由 US-012 接入(生成 invite / 二维码 / 倒计时)。
-        </Text>
-      </YStack>
-    </SafeAreaView>
+    <>
+      <Stack.Screen
+        options={{
+          title: '邀请配偶',
+          headerBackTitle: '家庭',
+        }}
+      />
+      <InviteScreen />
+    </>
   );
 }
