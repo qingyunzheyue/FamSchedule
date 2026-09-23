@@ -1,11 +1,11 @@
 /**
- * EditTaskScreen — 编辑任务 — T-US003-1
+ * EditTaskScreen — 编辑任务 — T-US003-1 + T-US003-1 review fix
  *
  * 职责(US-003 编辑 — 一次性格式的任务编辑):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 模板任务(template_id 非 null)→ 显示"模板任务暂不支持编辑"占位 + 阻止编辑
- *   4. 一次性任务 → 用 TaskFormBody(mode='edit')预填 + 提交走 TaskService.updateTask
+ *   4. 一次性任务 → 用 TaskFormBody 预填 + 提交走 TaskService.updateTask
  *   5. 成功 → router.back();失败 → Alert(已本地化 reason)
  *
  * 设计依据:
@@ -20,9 +20,16 @@
  *   - **不做 sticky header**(跟着 ScrollView 滚动)— 后续 polish
  *   - **成功不显示"已保存 ✨"**(CreateTaskScreen 那样)— 直接 back,体验更紧凑
  *
+ * T-US003-1 review fix:
+ *   - Blocker #1:删除 header 右侧"透明 placeholder"(既不可见也不能 tap),实际保存按钮
+ *     在 TaskFormBody 末尾 sticky bottom(template-not-supported 分支也同步清掉)
+ *   - Major #2:删除 mode="edit" prop(TaskFormBody 已不再接受)
+ *   - Major #3-5:currentUserId 来源从 `useFamilyValue()?.family.created_by ?? ''`
+ *     切换到 `useCurrentUserId()`,与其他 2 个 screen 同一来源(集中一处)
+ *
  * a11y:
- *   - Header:取消 + 标题 + 保存按钮
- *   - 表单字段:复用 TaskFormBody 已有的 a11y
+ *   - Header:取消 + 标题(header 不放保存按钮 — 走 TaskFormBody 内置按钮)
+ *   - 表单字段 + 保存按钮:复用 TaskFormBody 已有的 a11y
  */
 
 import { useCallback, useEffect, useMemo } from 'react';
@@ -30,6 +37,7 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -37,7 +45,10 @@ import { Text, XStack, YStack } from 'tamagui';
 import { WarningCircle } from 'phosphor-react-native';
 
 import { TaskService } from '../services/TaskService';
-import { useFamilyValue } from '../contexts/FamilyContext';
+import {
+  useCurrentUserId,
+  useFamilyValue,
+} from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import {
   fromTask,
@@ -55,7 +66,7 @@ import {
 
 const HEADER_CANCEL = '取消';
 const HEADER_TITLE = '编辑任务';
-const HEADER_SAVE = '保存';
+const SUBMIT_LABEL = '保存';
 
 const TASK_NOT_FOUND_TITLE = '任务不存在';
 const TASK_NOT_FOUND_MESSAGE = '这条任务可能已被删除,正在返回';
@@ -88,6 +99,7 @@ export function EditTaskScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ id?: string }>();
   const taskId = typeof params.id === 'string' ? params.id : '';
   const familyValue = useFamilyValue();
+  const currentUserId = useCurrentUserId();
   const tasks = useTasks();
 
   const task = useMemo(
@@ -118,7 +130,6 @@ export function EditTaskScreen(): React.JSX.Element {
   // Submit handler
   // -------------------------------------------------------------------------
 
-  const currentUserId = familyValue?.family.created_by ?? '';
   const today = useMemo(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -229,9 +240,7 @@ export function EditTaskScreen(): React.JSX.Element {
             >
               {HEADER_TITLE}
             </Text>
-            <Text fontSize="$body" color="transparent">
-              {' '}
-            </Text>
+            <View style={styles.headerRightSpacer} testID="header-right-spacer" />
           </XStack>
 
           <YStack
@@ -298,18 +307,15 @@ export function EditTaskScreen(): React.JSX.Element {
           >
             {HEADER_TITLE}
           </Text>
-          <Text fontSize="$body" color="transparent">
-            {' '}
-          </Text>
+          <View style={styles.headerRightSpacer} testID="header-right-spacer" />
         </XStack>
 
         <TaskFormBody
-          mode="edit"
           initialState={initialState}
           onSubmit={handleSubmit}
           currentUserId={currentUserId}
           onCancel={handleCancel}
-          submitLabel={HEADER_SAVE}
+          submitLabel={SUBMIT_LABEL}
         />
       </YStack>
     </SafeAreaView>
@@ -352,5 +358,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLOR_BG,
+  },
+  /**
+   * header 右侧占位 — 保留布局对齐(取消 / 标题 / 右侧空位),header 不放保存按钮,
+   * 保存按钮在 TaskFormBody 末尾 sticky bottom。T-US003-1 review fix Blocker #1。
+   */
+  headerRightSpacer: {
+    minWidth: 32,
   },
 });

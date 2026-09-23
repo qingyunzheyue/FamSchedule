@@ -169,3 +169,52 @@ export function useFamilyValue(): FamilyContextValue | null {
   const { state } = useFamily();
   return state.status === 'in_family' ? state.value : null;
 }
+
+/**
+ * useCurrentUserId — 当前登录 user.id 的单一来源 — T-US003-1 review fix
+ *
+ * 设计动机:
+ *   - 原先 3 个 screen(CreateTaskScreen / EditTaskScreen / TaskDetailScreen)各自
+ *     写 `familyValue?.family.created_by ?? ''` 推断 currentUserId;与 service 层
+ *     `supabase.auth.getUser()` 走的是两套来源。2 人家庭 + 当前用户=创建者时两值一致,
+ *     巧合对,reviewer 标记为长期债务。
+ *   - 短期修复:抽这个 hook 集中一处,3 个 screen 改用同一来源。
+ *
+ * 短期实现:`family.created_by` 与之前一致 — 因为本仓库只有 1 个 anon 登录态 =
+ * 1 个 user,2 人家庭里当前用户的 family.created_by 始终等同自己的 user.id(创建者身份
+ * 已认证,RPC check_family_membership 以 family_members.user_id = auth.uid() 校验)。
+ *
+ * 长期 TODO(留后续 polish — 严禁本任务擅自改):
+ *   - 真正切换到 `supabase.auth.getUser().then(u => u.id)` 单一来源
+ *   - FamilyContext.myRole 已对照 service 返回值后,本 hook 可直接消费它
+ *
+ * 契约(永远成立,变更前请更新本注释):
+ *   - 当前用户不在任何 family(no_family / loading)→ 返回 ''
+ *   - 当前用户在 family 中 → 返回 family.created_by(2 人家庭等同当前 user.id)
+ *
+ * 用法:
+ *   const currentUserId = useCurrentUserId();
+ *   const isOwner = task.created_by === currentUserId;
+ *
+ * 实现 = useFamilyValue() 单一读源 + resolveCurrentUserId 纯函数(为 jest 可测
+ * 抽出的纯函数,3 个 case:null / in_family / member 仍 created_by)。
+ */
+export function useCurrentUserId(): string {
+  const family = useFamilyValue();
+  return resolveCurrentUserId(family);
+}
+
+/**
+ * resolveCurrentUserId — useCurrentUserId 的纯函数部分,导出仅供测试。
+ *
+ * 故意保持 1 行 — 把 `(FamilyContextValue | null) → string` 的转换抽出,jest 可直接
+ * unit test(不依赖 React renderer / supabase mock);hook 本身只调 useFamilyValue 后
+ * 把结果交给它,任何 bug 都会在 resolveCurrentUserId 测试里红灯。
+ *
+ * 契约同 useCurrentUserId。
+ */
+export function resolveCurrentUserId(
+  family: FamilyContextValue | null,
+): string {
+  return family?.family.created_by ?? '';
+}

@@ -3,16 +3,13 @@
  *
  * 职责:
  *   - 抽离 CreateTaskScreen 的表单 fields + 校验红字 + 保存按钮 + submitting 状态
- *   - 暴露两个 mode:
- *     - 'create':交给 TaskService.createTask(由 onSubmit 包装)
- *     - 'edit'  :交给 TaskService.updateTask(由 onSubmit 包装)
  *   - 提交逻辑(rotation vs create)由调用方负责,本组件只暴露 onSubmit callback
  *
  * 设计动机:
  *   - US-003 任务 brief §C.1 明确要求 EditTaskScreen 复用 CreateTaskScreen 的 90%
  *     表单 UI。把表单 fields / 校验红字 / ChipGroup / TextInput 抽成共享组件,
- *     CreateTaskScreen 和 EditTaskScreen 只在外面包一层(mode 决定 onSubmit 与
- *     头文案 + 初始 state 注入)。
+ *     CreateTaskScreen 和 EditTaskScreen 只在外面包一层(initialState + onSubmit
+ *     注入,Header 文案 / Cancel 行为不同所以 Header 不抽)。
  *   - 这样 jest 单测可以共享同一份 visual regression(未来 T-FIX-06 hygiene),
  *     改一处两边生效。
  *
@@ -21,17 +18,20 @@
  *     (create → back,edit → back)
  *   - 不抽 SubmittedScreen 成功页(同 Header)— 不同文案
  *   - 把 FormField / ChipButton / ChipGroup 子组件留在本文件,因为没有复用需求
+ *   - **不**保留 `mode` prop(T-US003-1 review fix):create / edit 两路行为无差异,
+ *     父组件 onSubmit 已经分别调 createTask / updateTask;mode 只是日志里一个标签
  *
  * a11y:
  *   - 必填项 accessibilityHint="必填"
  *   - DateChip / TimeChip accessibilityRole="button"
  *   - 指派人 chips accessibilityRole="radio"
- *   - 保存按钮 disabled 时 accessibilityState={{disabled: true}}
+ *   - 保存按钮(T-US003-1 review fix 新增)disabled 时 accessibilityState={{disabled: true}}
+ *     + accessibilityLabel = submitDisabledHint || submitLabel
  *
  * 测试策略:
  *   - 同 CreateTaskScreen.test.tsx — **不**渲染组件本身(jest-expo + Tamagui 限制)
  *   - 视觉层由 ui-ux / 手动 / EAS 真机验证
- *   - 行为契约(默认值 / mode 切换)由 onSubmit 集成测试覆盖(EditTaskScreen /
+ *   - 行为契约(默认值)由 onSubmit 集成测试覆盖(EditTaskScreen /
  *     CreateTaskScreen 自己测)
  */
 
@@ -80,10 +80,7 @@ export type TaskFormSubmitResult =
   | { ok: true }
   | { ok: false; reason?: string };
 
-export type TaskFormMode = 'create' | 'edit';
-
 export interface TaskFormBodyProps {
-  mode: TaskFormMode;
   /** 父组件构造的初始 state(必填 — 调用方负责 fromTask / createInitialState)。 */
   initialState: CreateTaskFormState;
   /** 父组件负责调 service(createTask / updateTask)并返回结构化结果。 */
@@ -153,6 +150,7 @@ const RECURRENCE_BLOCKED_HINT = '周期即将推出';
 const COLOR_PRIMARY = '#DC5A24'; // 赤陶:选中 / 主按钮
 const COLOR_BORDER = '#E8DFD0'; // 亚麻:默认描边
 const COLOR_CHIP_BG = '#FFF9F0'; // 浅亚麻:chip 默认背景
+const COLOR_BG_FOOTER = '#F4ECDC'; // sticky bottom 背景(与 screen bg 一致)
 const COLOR_TEXT_PRIMARY = '#3A2E20';
 const COLOR_TEXT_SECONDARY = '#7A6B57';
 const COLOR_ERROR = '#C95444';
@@ -171,9 +169,10 @@ const COLOR_ERROR = '#C95444';
  *   - 周期非 none → toast + 拒绝提交 + 保存按钮 disabled
  *   - 校验失败 → 字段红字 + 拒绝提交
  *   - forceDisabled 时整个 form disabled(用于模板任务"暂不支持编辑")
+ *   - **保存按钮**(T-US003-1 review fix Blocker #1):放在 ScrollView 之外,form 末尾下方,
+ *     sticky bottom 视觉;disabled 时显示 submitDisabledHint 提示,a11y 完整
  */
 export function TaskFormBody({
-  mode: _mode,
   initialState,
   onSubmit,
   currentUserId,
@@ -217,7 +216,7 @@ export function TaskFormBody({
       result = await onSubmit(form, currentUserId);
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.error(`[TaskFormBody mode=${_mode}] onSubmit threw:`, err);
+      console.error('[TaskFormBody] onSubmit threw:', err);
       Alert.alert('保存失败', '请重试');
       setPhase('input');
       return;
@@ -231,7 +230,7 @@ export function TaskFormBody({
     // failed → reason 已本地化,直接显示
     Alert.alert('保存失败', result.reason ?? '请重试');
     setPhase('input');
-  }, [form, phase, forceDisabled, _mode, onSubmit, currentUserId]);
+  }, [form, phase, forceDisabled, onSubmit, currentUserId]);
 
   const isSubmitting = phase === 'submitting';
   const isFormValid = validateForm(form) === null;
@@ -471,6 +470,36 @@ export function TaskFormBody({
           </XStack>
         ) : null}
       </ScrollView>
+
+      {/* 保存按钮(T-US003-1 review fix Blocker #1) — sticky bottom
+          之前整个 feature 没有触发 save 的 onPress,header 的"保存"是空白 Text placeholder,
+          用户填完表单无任何方式提交。本组件内的 <Button onPress={handleSave}> 是单一权威入口。
+          a11y:accessibilityRole="button" + accessibilityState.disabled + accessibilityLabel 跟
+          saveLabel 同步;busy 用 isSubmitting 表达,不引 a11y 未知 prop。 */}
+      <XStack
+        paddingHorizontal="$md"
+        paddingTop="$sm"
+        paddingBottom="$md"
+        backgroundColor={COLOR_BG_FOOTER}
+        borderTopWidth={1}
+        borderTopColor={COLOR_BORDER}
+      >
+        <Button
+          theme="active"
+          flex={1}
+          size="$md"
+          borderRadius={12}
+          fontWeight="semibold"
+          onPress={handleSave}
+          disabled={saveDisabled}
+          accessibilityRole="button"
+          accessibilityLabel={submitDisabledHint ?? saveLabel}
+          accessibilityState={{ disabled: saveDisabled }}
+          testID="save-button"
+        >
+          {saveLabel}
+        </Button>
+      </XStack>
     </YStack>
   );
 }

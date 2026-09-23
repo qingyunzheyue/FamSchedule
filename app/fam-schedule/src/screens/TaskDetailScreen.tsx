@@ -1,5 +1,5 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务):
  *   1. 从 URL `?id=<taskId>` 读 taskId
@@ -26,6 +26,10 @@
  *   - ❌ 不做过期 banner(留 T-US014)
  *   - ❌ 不做确认 Dialog(留 T-US003-2)
  *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" / "删除"占位 Alert
+ *
+ * T-US003-1 review fix:
+ *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
+ *     切换到 `useCurrentUserId()`(与其他 2 个 screen 同一来源,集中一处)
  *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
@@ -57,7 +61,7 @@ import {
   User as UserIcon,
 } from 'phosphor-react-native';
 
-import { useFamilyValue } from '../contexts/FamilyContext';
+import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
 import type { Task } from '../lib/LocalStore';
@@ -113,6 +117,7 @@ export function TaskDetailScreen(): React.JSX.Element {
   const params = useLocalSearchParams<{ id?: string }>();
   const taskId = typeof params.id === 'string' ? params.id : '';
   const familyValue = useFamilyValue();
+  const currentUserId = useCurrentUserId();
   const tasks = useTasks();
 
   const task = useMemo(
@@ -156,7 +161,7 @@ export function TaskDetailScreen(): React.JSX.Element {
     [task, today],
   );
 
-  const isOwner = !!task && !!familyValue && task.created_by === familyValue.family.created_by;
+  const isOwner = !!task && task.created_by === currentUserId;
   const isCompleted = task?.completed_at != null;
   const isCancelled = task?.cancelled === true;
 

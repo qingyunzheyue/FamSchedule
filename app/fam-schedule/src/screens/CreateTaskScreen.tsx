@@ -1,8 +1,8 @@
 /**
- * CreateTaskScreen — 创建任务表单 — T-US001-1 + T-US003-1 refactor
+ * CreateTaskScreen — 创建任务表单 — T-US001-1 + T-US003-1 refactor + T-US003-1 review fix
  *
  * 职责(US-001 端到端 — 从 home 第一次能创建一个任务):
- *   1. 渲染表单:复用 TaskFormBody(mode='create')
+ *   1. 渲染表单:复用 TaskFormBody
  *   2. 状态机:input → submitting → submitted
  *      - input     : 默认;必填校验失败 → 字段红色描边 + 红字
  *      - submitting: 保存按钮变 "..." + 全部 input disabled
@@ -30,20 +30,29 @@
  *   - **不**接 SyncManager.enqueueAndApply(离线场景下 RPC 失败 → 显式错误)
  *
  * a11y(设计 §7):
- *   - Header:返回 + 标题 + 保存按钮(本组件)
+ *   - Header:返回 + 标题(无保存按钮占位 — T-US003-1 review fix Blocker #1:
+ *     之前 header 有空白 placeholder Text,既不可见也不能 tap,实际保存按钮
+ *     在 TaskFormBody 内;header 右侧改为空 View 保留布局对齐)
  *   - 必填项 / DateChip / TimeChip / 指派人 chips / 保存按钮 disabled — 全部由
  *     TaskFormBody 处理
+ *
+ * T-US003-1 review fix:
+ *   - Blocker #1:删除 header save placeholder(实际不可用),TaskFormBody 末尾的
+ *     <Button onPress={handleSave}> 是唯一触发保存的入口
+ *   - Major #2:删除 mode="create" prop(TUSKFormBody 已不再接受)
+ *   - Major #3-5:currentUserId 来源从 `useFamilyValue()?.family.created_by ?? ''`
+ *     切换到 `useCurrentUserId()`,与其他 2 个 screen 同一来源(集中一处)
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Text, XStack, YStack } from 'tamagui';
 import { CheckCircle } from 'phosphor-react-native';
 
 import { TaskService } from '../services/TaskService';
-import { useFamilyValue } from '../contexts/FamilyContext';
+import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import {
   createInitialState,
   toCreateTaskInput,
@@ -60,14 +69,13 @@ import {
 
 const HEADER_CANCEL = '取消';
 const HEADER_TITLE = '新建任务';
-const HEADER_SAVE = '保存';
+const SUBMIT_LABEL = '保存';
 const SUBMITTED_TEXT = '已保存 ✨';
 
 // =====================================================================
 // 颜色常量(与 TaskFormBody 对齐)
 // =====================================================================
 
-const COLOR_PRIMARY = '#DC5A24';
 const COLOR_TEXT_PRIMARY = '#3A2E20';
 const COLOR_TEXT_SECONDARY = '#7A6B57';
 const COLOR_SUCCESS = '#5C9D7E';
@@ -87,14 +95,16 @@ const COLOR_BG = '#F4ECDC';
  */
 export function CreateTaskScreen(): React.JSX.Element {
   const router = useRouter();
+  const currentUserId = useCurrentUserId();
   const familyValue = useFamilyValue();
 
   const initialState = useMemo<CreateTaskFormState>(() => {
     const init = createInitialState(new Date());
-    // 默认指派给自己(creator = family.created_by);
+    // 默认指派给自己(currentUserId === family.created_by);
+    // 兜底:极端 case(理论不该发生)— 当前 user 不在 members 列表里,fallback 到第 1 个
     if (familyValue) {
       const me = familyValue.members.find(
-        (m) => m.user_id === familyValue.family.created_by,
+        (m) => m.user_id === currentUserId,
       );
       if (me) {
         init.assigneeId = me.user_id;
@@ -103,7 +113,7 @@ export function CreateTaskScreen(): React.JSX.Element {
       }
     }
     return init;
-  }, [familyValue]);
+  }, [familyValue, currentUserId]);
 
   const [phase, setPhase] = useState<'input' | 'submitting' | 'submitted'>(
     'input',
@@ -201,7 +211,9 @@ export function CreateTaskScreen(): React.JSX.Element {
   return (
     <SafeAreaView style={styles.container}>
       <YStack flex={1}>
-        {/* Header — 左/中/右 */}
+        {/* Header — 左/中/右(右为占位 View 保留布局对齐 — T-US003-1 review fix Blocker #1
+            删除之前 header 的「空白 Text placeholder」,既不可见也不能 tap,误导用户。
+            实际保存按钮在 TaskFormBody 末尾,sticky bottom。) */}
         <XStack
           alignItems="center"
           justifyContent="space-between"
@@ -226,26 +238,15 @@ export function CreateTaskScreen(): React.JSX.Element {
           >
             {HEADER_TITLE}
           </Text>
-          <Text
-            fontSize="$body"
-            color={COLOR_PRIMARY}
-            fontWeight="semibold"
-            accessibilityRole="button"
-            accessibilityLabel={HEADER_SAVE}
-            testID="header-save-placeholder"
-          >
-            {/* 占位 — 实际保存按钮在 TaskFormBody 内部(放在 ScrollView 内) */}
-            {' '}
-          </Text>
+          <View style={styles.headerRightSpacer} testID="header-right-spacer" />
         </XStack>
 
         <TaskFormBody
-          mode="create"
           initialState={initialState}
           onSubmit={handleSubmit}
-          currentUserId={familyValue?.family.created_by ?? ''}
+          currentUserId={currentUserId}
           onCancel={handleCancel}
-          submitLabel={HEADER_SAVE}
+          submitLabel={SUBMIT_LABEL}
         />
       </YStack>
     </SafeAreaView>
@@ -260,5 +261,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLOR_BG,
+  },
+  /**
+   * header 右侧占位 — 保留布局对齐(取消 / 标题 / 右侧空位),header 不放保存按钮,
+   * 保存按钮在 TaskFormBody 末尾 sticky bottom。T-US003-1 review fix Blocker #1。
+   */
+  headerRightSpacer: {
+    minWidth: 32,
   },
 });
