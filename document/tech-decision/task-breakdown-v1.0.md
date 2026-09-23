@@ -1000,7 +1000,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: P1
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done(2026-09-23)— 详情页过期 banner 闭环(formatOverdueHours 纯函数 + OverdueBanner 组件 + TaskDetailScreen TaskHero 上方条件渲染;补卡按钮 placeholder 留 T-US006)
 - **Definition of Done**:
   - 任务详情页顶部 banner: "此任务已过期 X 小时"
   - X = now() - task_date - task_time(精确到小时)
@@ -1019,7 +1019,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: P1
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done(2026-09-23)— 启动过期任务查询闭环(ExpiryService 4 窗口 + filterExpiredTasks + getExpiredTasksSummary 读 family_settings fallback yesterday_today + useExpiredTaskCount hook;banner 渲染留 T-US015-2)
 - **Definition of Done**:
   - App 启动时:从 family_settings 读 expiry_window
   - 根据窗口查过期任务数:yesterday_today / this_week / all
