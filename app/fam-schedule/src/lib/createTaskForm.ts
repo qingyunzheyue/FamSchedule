@@ -1,12 +1,16 @@
 /**
- * createTaskForm — 创建任务表单的纯逻辑层 — T-US001-1
+ * createTaskForm — 创建任务表单的纯逻辑层 — T-US001-1 + T-US003-1
  *
- * 职责(单一职责:CreateTaskScreen 的纯函数 + 状态机,无 RN / Tamagui 依赖):
+ * 职责(单一职责:CreateTaskScreen / EditTaskScreen 的纯函数 + 状态机,
+ * 无 RN / Tamagui 依赖):
  *   1. 字段格式校验:date / time 正则 + 范围校验
  *   2. 表单整体校验:validateForm(state) → string | null(返回首个错误文案 / null)
  *   3. dateChip / timeChip 状态机 chipOptions + chipValue
  *   4. recurrence dropdown 选项 + 周期分支判定(本期 selected=非默认 → 拒绝提交)
  *   5. share scope 选项 + 翻译(本期二档;三档留 T-US009)
+ *   6. **T-US003-1 新增**:TaskRow ↔ CreateTaskFormState 双向翻译
+ *      - fromTask(task, members, currentUserId, today):用于 EditTaskScreen 预填
+ *      - toUpdateTaskInput(form, currentUserId):用于 EditTaskScreen 提交
  *
  * 设计动机(jest 可测):
  *   - 跟 codeInput.ts (T-US012-3) / inviteCountdown.ts (T-US012-2) 同一套模式:
@@ -19,9 +23,17 @@
  *   - 所有中文文案集中为 const 对象(`VALIDATION_MESSAGES` / `RECURRENCE_OPTIONS` /
  *     `SHARE_OPTIONS`),未来 i18n 抽到 react-i18next。
  *   - 当前硬编码中文与 pair-create / pair-join 文案风格一致(暖色家庭感)。
+ *
+ * 为什么把 EditTask 的表单状态也复用 CreateTask 的 CreateTaskFormState:
+ *   - EditTaskScreen 复用 CreateTaskScreen 的 90% 表单 UI(任务 brief §C.1)
+ *   - 数据结构 100% 相同(title / taskDate / taskTime / assigneeId / description /
+ *     recurrence / share) — 编辑只是初始值不同 + 提交函数不同
+ *   - 减少类型定义冗余;若未来 EditTask 引入差异字段(例如 editOnlyReason),
+ *     再单独建 EditTaskFormState
  */
 
-import type { CreateTaskInput } from '../services/TaskService';
+import type { CreateTaskInput, UpdateTaskInput } from '../services/TaskService';
+import type { FamilyMemberRow, TaskRow } from '../types/database';
 
 // =====================================================================
 // 1. 常量:文案 + 选项
@@ -367,4 +379,170 @@ export function addDays(d: Date, n: number): Date {
   const next = new Date(d);
   next.setDate(next.getDate() + n);
   return next;
+}
+
+// =====================================================================
+// 8. Edit 模式 — T-US003-1(TaskRow ↔ CreateTaskFormState)
+// =====================================================================
+
+/**
+ * 时间字面量 → TimeChipValue 推断(edit 模式预填用 — **当前简化版**)。
+ *
+ * 简化策略(T-US003-1 任务 brief §B — "其他 → 'custom' (含 task_time 任意值, 简化版)"):
+ *   - null / 空串 / 不合法 → 'none'
+ *   - 非 null(任意 'HH:MM(:SS)?' 字面量) → 'custom'(让用户看到 / 编辑原值)
+ *
+ * 为什么不把 09-12 映射到 'am' / 12-18 到 'pm':
+ *   - am/pm chip 本期不可提交(validateForm timeNotSupported — review Major #1)
+ *   - 若 fromTask 返回 am/pm,UI 显示 am/pm 选中 → 用户想保存就得切到 custom,
+ *     但切到 custom 时 taskTime 字段是空的(因为 am/pm chip 不维护具体时间),
+ *     用户会丢失原值
+ *   - 直接映射到 'custom' + 字面量 task_time 更符合用户预期:打开就能看到
+ *     原来的具体时间,改完保存
+ *
+ * 防御:非法格式(包括小时越界 24-99 / 分钟越界 60-99)→ fallback 'none'。
+ * 理论上 DB TIME 列不会传乱七八糟的串。
+ */
+export function inferTimeChip(taskTime: string | null | undefined): TimeChipValue {
+  if (!taskTime) return 'none';
+  // 校验 'HH:MM(:SS)?' 模式 + 范围(hour 0-23, minute 0-59)
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(taskTime);
+  if (!m) return 'none';
+  const hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return 'none';
+  return 'custom';
+}
+
+/**
+ * 日期字面量 → DateChipValue 推断(edit 模式预填用)。
+ *
+ * 简化策略(T-US003-1 任务 brief §B):
+ *   - taskDate === today          → 'today'
+ *   - taskDate === today + 1 day  → 'tomorrow'
+ *   - taskDate === today + 2 days → 'dayAfter'
+ *   - 其它(含过去日期 / > 2 天后) → 'custom'
+ *
+ * 注:简化为只识别 today / tomorrow / dayAfter 三种相对日期;其余(过期 / 远期)
+ * 落到 custom,UI 展示自定义输入。
+ */
+export function inferDateChip(
+  taskDate: string | null | undefined,
+  today: string,
+): DateChipValue {
+  if (!taskDate) return 'custom';
+  if (taskDate === today) return 'today';
+  if (taskDate === toLocalIsoDate(addDays(parseLocalDate(today), 1))) return 'tomorrow';
+  if (taskDate === toLocalIsoDate(addDays(parseLocalDate(today), 2))) return 'dayAfter';
+  return 'custom';
+}
+
+/**
+ * 把 'YYYY-MM-DD' 解析为本地时区的 Date。
+ *
+ * 防御:输入非法 → 返回 epoch(1970-01-01)。理论上 DB DATE 列不会传乱七八糟的串。
+ */
+function parseLocalDate(yyyyMmDd: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(yyyyMmDd);
+  if (!m) return new Date(0);
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10);
+  const d = parseInt(m[3], 10);
+  return new Date(y, mo - 1, d);
+}
+
+/**
+ * TaskRow → CreateTaskFormState(edit 模式预填)。
+ *
+ * 推断逻辑:
+ *   - title             : task.title(直接)
+ *   - taskDate          : task.task_date(直接)
+ *   - taskTime          : task.task_time ?? ''(null → '')
+ *   - dateChip          : inferDateChip(task.task_date, today)
+ *   - timeChip          : inferTimeChip(task.task_time)
+ *   - assigneeId        : task.assignee_id(直接 — 已在 members 里,UI 不需要再 map)
+ *   - coExecutorSelected: false(本期不支持)
+ *   - recurrence        : task.template_id 非 null → 'daily'(简化版;本任务不真正
+ *                         实现模板编辑,UI 看到 recurrence 非 none 会 Alert 拒交);
+ *                         null → 'none'
+ *   - description       : task.description ?? ''(null → '')
+ *   - share             : task.is_shared_view ? 'sharedView' : 'private'
+ *
+ * 设计决策:
+ *   - members / currentUserId 参数保留(签名扩展点),本期实现里不直接使用 —
+ *     assigneeId 直接来自 task.assignee_id(已在 members 里)。
+ *     留这两个参数给后续扩展(例如按 user.id 映射 '我/配偶' label 后回填到 UI)。
+ *
+ * ⚠️ 周期推断简化:模板任务(template_id 非 null)→ recurrence='daily'。这只
+ *   让 UI 在用户尝试"编辑"模板任务时显示 recurrence blocked hint(同 CreateTaskScreen
+ *   周期拦截)。本期**不**实现模板级联 PATCH(留 T-US004-1);EditTaskScreen 会
+ *   在 mount 时检测 task.template_id 非空 + 直接 disable 保存 + 显示"模板任务
+ *   暂不支持编辑"提示。
+ *
+ * ⚠️ 不调 addDays 这种依赖 system 时区的函数:parseLocalDate + toLocalIsoDate
+ *   用纯字符串运算 + Date(y, m-1, d) 构造,跨时区不漂。
+ */
+export function fromTask(
+  task: TaskRow,
+  _members: FamilyMemberRow[],
+  _currentUserId: string,
+  today: string,
+): CreateTaskFormState {
+  const timeChip = inferTimeChip(task.task_time);
+  const dateChip = inferDateChip(task.task_date, today);
+  // custom chip 时,taskTime / taskDate 直接落到 form 的具体字段
+  // 'none' 时 taskTime 设为''(UI 显示"不指定")
+  const taskTimeStr = task.task_time ?? '';
+  const taskDateStr = task.task_date ?? '';
+  return {
+    title: task.title,
+    taskDate: taskDateStr,
+    taskTime: timeChip === 'custom' ? taskTimeStr : '',
+    dateChip,
+    timeChip,
+    assigneeId: task.assignee_id,
+    coExecutorSelected: false,
+    recurrence: task.template_id !== null ? 'daily' : 'none',
+    description: task.description ?? '',
+    share: task.is_shared_view ? 'sharedView' : 'private',
+  };
+}
+
+/**
+ * CreateTaskFormState → UpdateTaskInput(edit 模式提交)。
+ *
+ * 复用 toCreateTaskInput 的 80%,差异:
+ *   - 没有 family_id / created_by / template_id(service 已知)
+ *   - 返回 UpdateTaskInput 而非 CreateTaskInput
+ *   - currentUserId 参数**不直接使用**(service 用 auth.getUser),保留签名
+ *     便于未来扩展(例如日志 / 审计)
+ *
+ * 字段处理:
+ *   - title             : form.title.trim()
+ *   - taskDate          : resolveTaskDate(form)(复用 create 的派生)
+ *   - taskTime          : resolveTaskTime(form)(复用 create 的派生,带 am/pm → '' 防御)
+ *   - assigneeId        : form.assigneeId
+ *   - description       : form.description.trim() 或 null
+ *   - isSharedView      : share === 'sharedView'
+ *
+ * 注意:本函数**不**做提交校验 — 调用方需先 validateForm + isRecurrenceSupported
+ * 通过后再 toUpdateTaskInput,否则 service / 后端拒绝。
+ */
+export function toUpdateTaskInput(
+  form: CreateTaskFormState,
+  _currentUserId: string,
+  now: Date = new Date(),
+): UpdateTaskInput {
+  const isSharedView = form.share === 'sharedView';
+  const taskTime = resolveTaskTime(form);
+  const description = form.description.trim().length > 0 ? form.description.trim() : null;
+
+  return {
+    title: form.title.trim(),
+    taskDate: resolveTaskDate(form, now),
+    taskTime,
+    assigneeId: form.assigneeId,
+    description,
+    isSharedView,
+  };
 }

@@ -43,6 +43,7 @@ function mockMakeQueryBuilder(): {
   maybeSingle: jest.Mock;
   single: jest.Mock;
   insert: jest.Mock;
+  update: jest.Mock;
   then: jest.Mock;
 } {
   const builder: {
@@ -51,6 +52,7 @@ function mockMakeQueryBuilder(): {
     maybeSingle: jest.Mock;
     single: jest.Mock;
     insert: jest.Mock;
+    update: jest.Mock;
     then: jest.Mock;
   } = {
     select: jest.fn(),
@@ -58,6 +60,7 @@ function mockMakeQueryBuilder(): {
     maybeSingle: jest.fn(),
     single: jest.fn(),
     insert: jest.fn(),
+    update: jest.fn(),
     then: jest.fn(),
   };
   builder.select.mockReturnValue(builder);
@@ -65,6 +68,7 @@ function mockMakeQueryBuilder(): {
   builder.maybeSingle.mockResolvedValue({ data: null, error: null });
   builder.single.mockResolvedValue({ data: null, error: null });
   builder.insert.mockReturnValue(builder);
+  builder.update.mockReturnValue(builder);
   // 默认 await builder → {data: null, error: null}(thenable)
   builder.then.mockImplementation(
     (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
@@ -92,7 +96,12 @@ jest.mock('../src/lib/supabase', () => {
 
 // ---- Imports (mock 之后) ----------------------------------------------
 
-import { TaskService, createTask, _resetForTests } from '../src/services/TaskService';
+import {
+  TaskService,
+  createTask,
+  updateTask,
+  _resetForTests,
+} from '../src/services/TaskService';
 
 // ---- Test fixtures ----------------------------------------------------
 
@@ -622,6 +631,547 @@ describe('TaskService namespace', () => {
       // 真实 server 行为会 echo insert payload 字段,所以这里 task.title
       // 等于 sampleRow.title(= setup mock 的 server 回包)
       expect(result.task.title).toBe('喂奶粉');
+    }
+  });
+
+  it('TaskService.updateTask is the same function reference as named export', () => {
+    expect(TaskService.updateTask).toBe(updateTask);
+  });
+});
+
+// =====================================================================
+// updateTask — happy path — T-US003-1
+// =====================================================================
+
+/**
+ * 给 updateTask 构造一条链路:
+ *   1. pre-check getMyFamily(3 次 from 调用)— 默认走 setupHappyPath 的队列
+ *   2. fetch existing task from tasks(单 .select().eq().single())
+ *   3. UPDATE tasks from update chain — update payload spy
+ *
+ * 返回:
+ *   - updatePayloadSpy:用于断言 PATCH 字段
+ *
+ * 行为参数:
+ *   - existingRow:mock 出来的 existing task row(默认 = creator + non-template + non-completed)
+ *   - updatedRow :mock server PATCH 后返回的 row(默认 sampleRow)
+ */
+function setupUpdateHappyPath(opts?: {
+  existingRow?: Record<string, unknown> | null;
+  updatedRow?: Record<string, unknown>;
+}): { updatePayloadSpy: jest.Mock } {
+  const existingRow =
+    opts?.existingRow === undefined
+      ? {
+          created_by: CREATOR_ID,
+          template_id: null,
+          completed_at: null,
+          cancelled: false,
+        }
+      : opts.existingRow;
+  const updatedRow = opts?.updatedRow ?? sampleRow;
+
+  // pre-check (3 builders,同 setupHappyPath)
+  const b1 = mockMakeQueryBuilder();
+  b1.maybeSingle.mockResolvedValue({
+    data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+    error: null,
+  });
+  const b2 = mockMakeQueryBuilder();
+  b2.single.mockResolvedValue({
+    data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+    error: null,
+  });
+  const b3 = mockMakeQueryBuilder();
+  b3.then.mockImplementation(
+    (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+      onFulfilled({
+        data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+        error: null,
+      });
+      return Promise.resolve();
+    },
+  );
+
+  // fetch existing
+  const bFetch = mockMakeQueryBuilder();
+  bFetch.single.mockResolvedValue({ data: existingRow, error: null });
+
+  // update
+  const updatePayloadSpy = jest.fn();
+  const bUpdate = mockMakeQueryBuilder();
+  bUpdate.update.mockImplementation((p: Record<string, unknown>) => {
+    updatePayloadSpy(p);
+    return bUpdate;
+  });
+  bUpdate.single.mockResolvedValue({ data: updatedRow, error: null });
+
+  const queue = [b1, b2, b3, bFetch, bUpdate];
+  let i = 0;
+  mockSupabaseFrom.mockImplementation(() => {
+    const b = queue[i] ?? mockMakeQueryBuilder();
+    i += 1;
+    return b;
+  });
+
+  return { updatePayloadSpy };
+}
+
+const TASK_ID = 'task-uuid-eeee-eeee-eeee-eeeeeeeeeeee';
+
+describe('TaskService.updateTask — happy path', () => {
+  it('returns updated{task} with full row echoed from server', async () => {
+    setupUpdateHappyPath();
+
+    const result = await updateTask(TASK_ID, {
+      title: '倒垃圾(改)',
+      taskDate: '2026-09-23',
+      taskTime: '08:00',
+      assigneeId: SPOUSE_ID,
+    });
+
+    expect(result.status).toBe('updated');
+    if (result.status === 'updated') {
+      expect(result.task.id).toBe(TASK_ID);
+      expect(result.task.title).toBe('喂奶粉'); // mock server 返回 sampleRow.title
+    }
+  });
+
+  it('PATCH payload contains all 6 editable fields (title, task_date, task_time, assignee_id, description, is_shared_view)', async () => {
+    const { updatePayloadSpy } = setupUpdateHappyPath();
+
+    await updateTask(TASK_ID, {
+      title: '新标题',
+      taskDate: '2026-09-23',
+      taskTime: '08:00',
+      assigneeId: SPOUSE_ID,
+      description: '新备注',
+      isSharedView: true,
+    });
+
+    expect(updatePayloadSpy).toHaveBeenCalledTimes(1);
+    const payload = updatePayloadSpy.mock.calls[0][0];
+    expect(payload.title).toBe('新标题');
+    expect(payload.task_date).toBe('2026-09-23');
+    expect(payload.task_time).toBe('08:00');
+    expect(payload.assignee_id).toBe(SPOUSE_ID);
+    expect(payload.description).toBe('新备注');
+    expect(payload.is_shared_view).toBe(true);
+  });
+
+  it('does NOT include created_by / template_id / family_id / completed_at / cancelled (PATCH only)', async () => {
+    const { updatePayloadSpy } = setupUpdateHappyPath();
+
+    await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    const payload = updatePayloadSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.created_by).toBeUndefined();
+    expect(payload.template_id).toBeUndefined();
+    expect(payload.family_id).toBeUndefined();
+    expect(payload.completed_at).toBeUndefined();
+    expect(payload.cancelled).toBeUndefined();
+  });
+
+  it('does NOT call insert (uses update path)', async () => {
+    setupUpdateHappyPath();
+
+    const insertCalls: unknown[] = [];
+    // 收集所有 mockMakeQueryBuilder 上的 insert 调用
+    const origFrom = mockSupabaseFrom.getMockImplementation();
+    mockSupabaseFrom.mockImplementation((table: string) => {
+      const b = origFrom ? (origFrom as (t: string) => unknown)(table) : mockMakeQueryBuilder();
+      const builder = b as ReturnType<typeof mockMakeQueryBuilder>;
+      const origInsert = builder.insert.getMockImplementation();
+      builder.insert.mockImplementation((p: unknown) => {
+        insertCalls.push({ table, payload: p });
+        if (origInsert) return origInsert(p);
+        return builder;
+      });
+      return builder;
+    });
+
+    await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    // 不应有 insert('tasks', ...) 的调用
+    const tasksInserts = insertCalls.filter((c) => (c as { table: string }).table === 'tasks');
+    expect(tasksInserts).toHaveLength(0);
+  });
+
+  it('defensive: taskTime="" is normalized to null in update payload', async () => {
+    const { updatePayloadSpy } = setupUpdateHappyPath();
+
+    await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      taskTime: '',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(updatePayloadSpy.mock.calls[0][0].task_time).toBeNull();
+  });
+
+  it('description omitted → null in payload', async () => {
+    const { updatePayloadSpy } = setupUpdateHappyPath();
+
+    await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(updatePayloadSpy.mock.calls[0][0].description).toBeNull();
+  });
+
+  it('isSharedView omitted → false in payload', async () => {
+    const { updatePayloadSpy } = setupUpdateHappyPath();
+
+    await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(updatePayloadSpy.mock.calls[0][0].is_shared_view).toBe(false);
+  });
+});
+
+// =====================================================================
+// updateTask — failure paths
+// =====================================================================
+
+describe('TaskService.updateTask — failure paths', () => {
+  it('returns failed{reason:"no_family"} when getMyFamily returns null', async () => {
+    const builder = mockMakeQueryBuilder();
+    builder.maybeSingle.mockResolvedValue({ data: null, error: null });
+    setMockFromBuilder('family_members', builder);
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('no_family');
+    }
+    // 不应 fetch / update tasks
+    const tasksCalls = mockSupabaseFrom.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'tasks',
+    );
+    expect(tasksCalls).toHaveLength(0);
+  });
+
+  it('returns failed{reason:"not_authenticated"} when second getUser returns null', async () => {
+    setupUpdateHappyPath();
+    // getMyFamily 内部已经用掉第一次 getUser;updateTask 自己的 getUser 返回 null
+    mockAuthGetUser.mockResolvedValueOnce({
+      data: { user: { id: CREATOR_ID } },
+      error: null,
+    });
+    mockAuthGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_authenticated');
+    }
+  });
+
+  it('returns failed{reason:"not_owner"} when task.created_by !== current user', async () => {
+    setupUpdateHappyPath({
+      existingRow: {
+        created_by: SPOUSE_ID, // different from current user (CREATOR_ID)
+        template_id: null,
+        completed_at: null,
+        cancelled: false,
+      },
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_owner');
+    }
+  });
+
+  it('returns failed{reason:"template_not_supported"} when task.template_id is non-null', async () => {
+    setupUpdateHappyPath({
+      existingRow: {
+        created_by: CREATOR_ID,
+        template_id: 'template-uuid-3333-3333-3333-333333333333',
+        completed_at: null,
+        cancelled: false,
+      },
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('template_not_supported');
+    }
+  });
+
+  it('returns failed{reason:"task_completed"} when task.completed_at is set', async () => {
+    setupUpdateHappyPath({
+      existingRow: {
+        created_by: CREATOR_ID,
+        template_id: null,
+        completed_at: '2026-09-22T10:05:00Z',
+        cancelled: false,
+      },
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_completed');
+    }
+  });
+
+  it('returns failed{reason:"task_cancelled"} when task.cancelled is true', async () => {
+    setupUpdateHappyPath({
+      existingRow: {
+        created_by: CREATOR_ID,
+        template_id: null,
+        completed_at: null,
+        cancelled: true,
+      },
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_cancelled');
+    }
+  });
+
+  it('returns failed{reason: error.message} when fetch existing task RPC errors', async () => {
+    // pre-check 通过
+    const b1 = mockMakeQueryBuilder();
+    b1.maybeSingle.mockResolvedValue({
+      data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b2 = mockMakeQueryBuilder();
+    b2.single.mockResolvedValue({
+      data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b3 = mockMakeQueryBuilder();
+    b3.then.mockImplementation(
+      (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+        onFulfilled({
+          data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+          error: null,
+        });
+        return Promise.resolve();
+      },
+    );
+    // fetch existing → error
+    const bFetch = mockMakeQueryBuilder();
+    bFetch.single.mockResolvedValue({
+      data: null,
+      error: { message: 'RLS violation', name: 'PostgrestError' },
+    });
+
+    const queue = [b1, b2, b3, bFetch];
+    let i = 0;
+    mockSupabaseFrom.mockImplementation(() => {
+      const b = queue[i] ?? mockMakeQueryBuilder();
+      i += 1;
+      return b;
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('RLS violation');
+    }
+  });
+
+  it('returns failed{reason:"task_not_found"} when fetch existing task returns null data', async () => {
+    // pre-check 通过 + fetch existing → null data, no error
+    const b1 = mockMakeQueryBuilder();
+    b1.maybeSingle.mockResolvedValue({
+      data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b2 = mockMakeQueryBuilder();
+    b2.single.mockResolvedValue({
+      data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b3 = mockMakeQueryBuilder();
+    b3.then.mockImplementation(
+      (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+        onFulfilled({
+          data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+          error: null,
+        });
+        return Promise.resolve();
+      },
+    );
+    const bFetch = mockMakeQueryBuilder();
+    bFetch.single.mockResolvedValue({ data: null, error: null });
+
+    const queue = [b1, b2, b3, bFetch];
+    let i = 0;
+    mockSupabaseFrom.mockImplementation(() => {
+      const b = queue[i] ?? mockMakeQueryBuilder();
+      i += 1;
+      return b;
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_not_found');
+    }
+  });
+
+  it('returns failed{reason: error.message} when update RPC errors', async () => {
+    // pre-check + fetch existing pass;update fails
+    const b1 = mockMakeQueryBuilder();
+    b1.maybeSingle.mockResolvedValue({
+      data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b2 = mockMakeQueryBuilder();
+    b2.single.mockResolvedValue({
+      data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b3 = mockMakeQueryBuilder();
+    b3.then.mockImplementation(
+      (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+        onFulfilled({
+          data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+          error: null,
+        });
+        return Promise.resolve();
+      },
+    );
+    const bFetch = mockMakeQueryBuilder();
+    bFetch.single.mockResolvedValue({
+      data: { created_by: CREATOR_ID, template_id: null, completed_at: null, cancelled: false },
+      error: null,
+    });
+    const bUpdate = mockMakeQueryBuilder();
+    bUpdate.single.mockResolvedValue({
+      data: null,
+      error: { message: 'network timeout', name: 'PostgrestError' },
+    });
+
+    const queue = [b1, b2, b3, bFetch, bUpdate];
+    let i = 0;
+    mockSupabaseFrom.mockImplementation(() => {
+      const b = queue[i] ?? mockMakeQueryBuilder();
+      i += 1;
+      return b;
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('network timeout');
+    }
+  });
+
+  it('returns failed{reason:"updateTask returned no data"} when update returns null data (defensive)', async () => {
+    const b1 = mockMakeQueryBuilder();
+    b1.maybeSingle.mockResolvedValue({
+      data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b2 = mockMakeQueryBuilder();
+    b2.single.mockResolvedValue({
+      data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+      error: null,
+    });
+    const b3 = mockMakeQueryBuilder();
+    b3.then.mockImplementation(
+      (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+        onFulfilled({
+          data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+          error: null,
+        });
+        return Promise.resolve();
+      },
+    );
+    const bFetch = mockMakeQueryBuilder();
+    bFetch.single.mockResolvedValue({
+      data: { created_by: CREATOR_ID, template_id: null, completed_at: null, cancelled: false },
+      error: null,
+    });
+    const bUpdate = mockMakeQueryBuilder();
+    bUpdate.single.mockResolvedValue({ data: null, error: null });
+
+    const queue = [b1, b2, b3, bFetch, bUpdate];
+    let i = 0;
+    mockSupabaseFrom.mockImplementation(() => {
+      const b = queue[i] ?? mockMakeQueryBuilder();
+      i += 1;
+      return b;
+    });
+
+    const result = await updateTask(TASK_ID, {
+      title: 't',
+      taskDate: '2026-09-22',
+      assigneeId: CREATOR_ID,
+    });
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('no data');
     }
   });
 });

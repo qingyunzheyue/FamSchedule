@@ -1,5 +1,5 @@
 /**
- * TaskCard — 任务卡片(C-01) — T-US002-1
+ * TaskCard — 任务卡片(C-01) — T-US002-1 + T-US003-1 refactor
  *
  * 职责(US-002 §3.5):
  *   - 左侧时间(formatTaskTime 输出:'HH:MM' 或 '全天')
@@ -14,8 +14,10 @@
  *   - overdue:左侧 4px 红竖条 + bg 浅 warning
  *   - 其他:默认 surface 背景
  *
- * 交互:
- *   - 整卡可点击 → 路由 task/[id](T-US003 详情未做,路由 wrapper 已有占位)
+ * 交互(T-US003-1 修改):
+ *   - **不在内部调 useRouter**(reviewer Minor #4 指出)— 改为接收 `onPress` prop,
+ *     由父层(HomeScreen)实现 navigation。这样 TaskCard 保持纯展示组件,便于复用 /
+ *     单测 / 替换跳转逻辑(埋点 / 拦截等)。
  *
  * a11y(设计 §7):
  *   - 整卡 accessibilityRole="button"
@@ -23,13 +25,12 @@
  *
  * 不在本组件范围:
  *   - 打卡按钮(C-02)— 留 T-US005
- *   - 详情/编辑/删除(T-US003)
+ *   - 详情/编辑/删除由 TaskDetailScreen 处理(T-US003-1)
  *   - 周期 / 共同执行人 / 共享 meta(T-US004-1 / T-US009 / T-US010)
  */
 
 import { memo } from 'react';
 import { StyleSheet, View, Text } from 'react-native';
-import { useRouter } from 'expo-router';
 
 import type { Task } from '../lib/LocalStore';
 import { computeTaskBadge, formatTaskTime, type TaskBadge } from '../lib/taskListFilters';
@@ -105,18 +106,26 @@ export interface TaskCardProps {
   task: Task;
   assigneeLabel: '我' | '配偶';
   badge: TaskBadge;
+  /**
+   * T-US003-1 新增:点击回调,由父层(HomeScreen)实现 navigation。
+   * TaskCard 内部不再直接调 useRouter — 保持纯展示。
+   */
+  onPress: (task: Task) => void;
 }
 
 /**
  * 单条任务卡片。
  *
  * - 受父组件传入 badge(在 HomeScreen 列表渲染时统一算,避免每张卡重复算)
- * - onPress → router.push(`/(main)/(home)/task/${task.id}`)(T-US003 详情页占位)
+ * - onPress → 调 prop 传入的回调(HomeScreen 决定跳详情页 / 埋点 / 拦截)
  * - 视觉变体由 badge.kind 派生(completed/cancelled/overdue 三态)
  */
-function TaskCardImpl({ task, assigneeLabel, badge }: TaskCardProps): React.JSX.Element {
-  const router = useRouter();
-
+function TaskCardImpl({
+  task,
+  assigneeLabel,
+  badge,
+  onPress,
+}: TaskCardProps): React.JSX.Element {
   // 视觉变体派生
   const isCompleted = badge.kind === 'completed';
   const isCancelled = badge.kind === 'cancelled';
@@ -131,12 +140,7 @@ function TaskCardImpl({ task, assigneeLabel, badge }: TaskCardProps): React.JSX.
   const cardBg = isOverdue ? COLOR_WARNING_BG : COLOR_SURFACE;
 
   const handlePress = (): void => {
-    // T-US002-1 范围:跳详情页路由(wrapper 占位显示 task id,无副作用)
-    // T-US003 详情页接入后再加业务逻辑
-    router.push({
-      pathname: '/(main)/(home)/task/[id]',
-      params: { id: task.id },
-    });
+    onPress(task);
   };
 
   // a11y label — 综合 title / 时间 / 指派人 / 状态

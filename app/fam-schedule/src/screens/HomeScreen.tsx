@@ -182,12 +182,19 @@ export function HomeScreen(): React.JSX.Element {
     router.push('/(main)/(home)/task-create');
   }, [router]);
 
-  // ---- 任务点击(目前 TaskCard 内部已自己 push,这里留 hook 给后续埋点) ----
+  // ---- 任务点击 — T-US003-1:真正跳详情页 ----
 
-  const handleTaskPress = useCallback((_task: Task) => {
-    // T-US002-1 不做埋点;TaskCard 内部 router.push 已生效
-    // 留 hook 给 T-US003 / analytics 用
-  }, []);
+  const handleTaskPress = useCallback(
+    (task: Task): void => {
+      // T-US003-1:TaskCard 内部不再 useRouter,改为纯展示 + onPress 回调;
+      // HomeScreen 统一管理 navigation(便于埋点 / 拦截 / 替换路由)。
+      router.push({
+        pathname: '/(main)/(home)/task/[id]',
+        params: { id: task.id },
+      });
+    },
+    [router],
+  );
 
   // ---- 下拉刷新 ----
 

@@ -1,5 +1,5 @@
 /**
- * TaskList — 任务列表容器 — T-US002-1
+ * TaskList — 任务列表容器 — T-US002-1 + T-US003-1
  *
  * 职责(US-002 §3.1 + §3.6):
  *   - FlatList 渲染 TaskCard 列表
@@ -16,6 +16,8 @@
  *   - `assigneeLabels` 是 user.id → '我' / '配偶' 映射,父组件从 useFamilyValue() 派生
  *   - 每行 task.id → 查 assigneeLabels,拿到 label
  *   - 每行 computeTaskBadge(task, today)在父组件批量算 + 通过 prop 传入(本组件无 today 概念)
+ *   - T-US003-1:onTaskPress 真正传给 TaskCard(之前是 dead prop)— TaskCard 不再内部
+ *     useRouter,改为纯展示 + 触发回调;HomeScreen 实现具体 navigation
  *
  * 简化决策:
  *   - EmptyState 不做插画(☕)— brief 明确说"EmptyState: 文字 + 创建按钮(无插画)"
@@ -24,7 +26,6 @@
 
 import { useMemo } from 'react';
 import { FlatList, StyleSheet, View, Text, RefreshControl } from 'react-native';
-import { useRouter } from 'expo-router';
 import { Button } from 'tamagui';
 import { Plus } from 'phosphor-react-native';
 
@@ -104,9 +105,8 @@ export interface TaskListProps {
  * - paddingBottom:100 —— 给底部 TabBar(主 tab 高约 49-83px)+ FAB 留空间
  * - 下拉刷新 RefreshControl.tintColor = 赤陶(设计 §3.7)
  *
- * 注:onTaskPress 当前没用(每张 TaskCard 内部自己 router.push)—— 保留 prop
- * 是为了上层(HomeScreen)能统一管理 navigation,后续 T-US003 详情页可能要
- * 在父层做埋点 / 跳转前校验。
+ * T-US003-1:onTaskPress 真正传给 TaskCard(之前是 dead prop)— TaskCard 不再内部
+ * useRouter,改为纯展示 + 触发回调。HomeScreen 在 handleTaskPress 里实现跳详情。
  */
 export function TaskList({
   tasks,
@@ -115,6 +115,7 @@ export function TaskList({
   view,
   refreshing,
   onRefresh,
+  onTaskPress,
   onCreatePress,
 }: TaskListProps): React.JSX.Element {
   // 每行 badge 预计算,避免 render 期间重复调用
@@ -138,6 +139,7 @@ export function TaskList({
           task={item.task}
           assigneeLabel={item.assigneeLabel}
           badge={item.badge}
+          onPress={onTaskPress}
         />
       )}
       ListEmptyComponent={

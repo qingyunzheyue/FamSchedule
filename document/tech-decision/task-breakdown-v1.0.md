@@ -813,7 +813,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Med(模板级联更新逻辑要在 FE 配合)
 - **Priority**: P0
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done (2026-09-23)
 - **Definition of Done**:
   - 复用 CreateTaskScreen 的表单,预填当前值
   - 模板任务:改完调 PATCH /task_templates + PATCH /tasks(template_id eq, task_date gte today, completed_at is null)

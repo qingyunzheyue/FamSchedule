@@ -62,6 +62,10 @@ import {
   isRecurrenceSupported,
   toCreateTaskInput,
   memberLabel,
+  fromTask,
+  toUpdateTaskInput,
+  inferDateChip,
+  inferTimeChip,
   VALIDATION_MESSAGES,
   DATE_CHIP_OPTIONS,
   TIME_CHIP_OPTIONS,
@@ -69,6 +73,7 @@ import {
   SHARE_OPTIONS,
   type CreateTaskFormState,
 } from '../src/lib/createTaskForm';
+import type { FamilyMemberRow, TaskRow } from '../src/types/database';
 
 // =====================================================================
 // Test fixtures
@@ -515,5 +520,248 @@ describe('option arrays', () => {
     expect(VALIDATION_MESSAGES.assigneeRequired).toBeTruthy(); // 附带修 Minor #3
     expect(VALIDATION_MESSAGES.recurrenceNotSupported).toBeTruthy();
     expect(VALIDATION_MESSAGES.coExecutorNotSupported).toBeTruthy();
+  });
+});
+
+// =====================================================================
+// T-US003-1 新增 — fromTask / toUpdateTaskInput / inferDateChip / inferTimeChip
+// =====================================================================
+
+/** 测试用 TaskRow 工厂 */
+function makeTaskRow(overrides: Partial<TaskRow> = {}): TaskRow {
+  return {
+    id: 'task-uuid-1111-1111-1111-111111111111',
+    template_id: null,
+    family_id: 'family-uuid-2222-2222-2222-222222222222',
+    title: '喂奶粉',
+    description: '7 勺奶粉,150ml 温水',
+    task_date: '2026-09-22',
+    task_time: '20:00',
+    assignee_id: CREATOR_ID,
+    co_executor_ids: [],
+    is_shared_view: false,
+    created_by: CREATOR_ID,
+    completed_at: null,
+    completed_by: null,
+    is_makeup: false,
+    cancelled: false,
+    created_at: '2026-09-22T10:00:00Z',
+    updated_at: '2026-09-22T10:00:00Z',
+    ...overrides,
+  };
+}
+
+const FAMILY_MEMBERS: FamilyMemberRow[] = [
+  { family_id: 'family-uuid-2222-2222-2222-222222222222', user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+  { family_id: 'family-uuid-2222-2222-2222-222222222222', user_id: SPOUSE_ID, joined_at: '2026-09-01T00:00:00Z' },
+];
+
+describe('inferDateChip (T-US003-1)', () => {
+  it('returns "today" when taskDate === today', () => {
+    expect(inferDateChip('2026-09-22', '2026-09-22')).toBe('today');
+  });
+
+  it('returns "tomorrow" when taskDate === today + 1 day', () => {
+    expect(inferDateChip('2026-09-23', '2026-09-22')).toBe('tomorrow');
+  });
+
+  it('returns "dayAfter" when taskDate === today + 2 days', () => {
+    expect(inferDateChip('2026-09-24', '2026-09-22')).toBe('dayAfter');
+  });
+
+  it('returns "custom" for past dates', () => {
+    expect(inferDateChip('2026-09-20', '2026-09-22')).toBe('custom');
+  });
+
+  it('returns "custom" for dates > today + 2 days', () => {
+    expect(inferDateChip('2026-10-01', '2026-09-22')).toBe('custom');
+  });
+
+  it('returns "custom" for null / undefined', () => {
+    expect(inferDateChip(null, '2026-09-22')).toBe('custom');
+    expect(inferDateChip(undefined, '2026-09-22')).toBe('custom');
+  });
+
+  it('handles month boundary correctly', () => {
+    expect(inferDateChip('2026-10-01', '2026-09-30')).toBe('tomorrow');
+    expect(inferDateChip('2026-10-02', '2026-09-30')).toBe('dayAfter');
+  });
+});
+
+describe('inferTimeChip (T-US003-1)', () => {
+  it('returns "none" for null', () => {
+    expect(inferTimeChip(null)).toBe('none');
+  });
+
+  it('returns "none" for undefined', () => {
+    expect(inferTimeChip(undefined)).toBe('none');
+  });
+
+  it('returns "none" for empty string', () => {
+    expect(inferTimeChip('')).toBe('none');
+  });
+
+  it('returns "none" for malformed strings (defensive)', () => {
+    expect(inferTimeChip('not a time')).toBe('none');
+    expect(inferTimeChip('25:00')).toBe('none');
+    expect(inferTimeChip('12345')).toBe('none');
+  });
+
+  it('returns "custom" for any valid HH:MM string (simplified version)', () => {
+    // 简化版:任何合法时间字面量 → 'custom'(让用户看到 / 编辑原值)
+    expect(inferTimeChip('09:00')).toBe('custom');
+    expect(inferTimeChip('12:00')).toBe('custom');
+    expect(inferTimeChip('20:30')).toBe('custom');
+    expect(inferTimeChip('23:59')).toBe('custom');
+  });
+
+  it('returns "custom" for HH:MM:SS (DB sometimes returns with seconds)', () => {
+    expect(inferTimeChip('20:00:00')).toBe('custom');
+  });
+});
+
+describe('fromTask (T-US003-1)', () => {
+  it('maps a full TaskRow to CreateTaskFormState', () => {
+    const task = makeTaskRow({
+      title: '倒垃圾',
+      task_date: '2026-09-22',
+      task_time: '20:00',
+      description: '记得带钥匙',
+      is_shared_view: true,
+      assignee_id: SPOUSE_ID,
+    });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+
+    expect(state.title).toBe('倒垃圾');
+    expect(state.taskDate).toBe('2026-09-22');
+    expect(state.taskTime).toBe('20:00');
+    expect(state.dateChip).toBe('today');
+    expect(state.timeChip).toBe('custom');
+    expect(state.assigneeId).toBe(SPOUSE_ID);
+    expect(state.description).toBe('记得带钥匙');
+    expect(state.share).toBe('sharedView');
+    expect(state.recurrence).toBe('none');
+    expect(state.coExecutorSelected).toBe(false);
+  });
+
+  it('null task_time → timeChip="none", taskTime=""', () => {
+    const task = makeTaskRow({ task_time: null });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.timeChip).toBe('none');
+    expect(state.taskTime).toBe('');
+  });
+
+  it('null description → description=""', () => {
+    const task = makeTaskRow({ description: null });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.description).toBe('');
+  });
+
+  it('is_shared_view=true → share="sharedView"', () => {
+    const task = makeTaskRow({ is_shared_view: true });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.share).toBe('sharedView');
+  });
+
+  it('is_shared_view=false → share="private"', () => {
+    const task = makeTaskRow({ is_shared_view: false });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.share).toBe('private');
+  });
+
+  it('task_date === today + 1 day → dateChip="tomorrow"', () => {
+    const task = makeTaskRow({ task_date: '2026-09-23' });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.dateChip).toBe('tomorrow');
+    expect(state.taskDate).toBe('2026-09-23');
+  });
+
+  it('task_date in past → dateChip="custom", taskDate preserved', () => {
+    const task = makeTaskRow({ task_date: '2026-09-15' });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.dateChip).toBe('custom');
+    expect(state.taskDate).toBe('2026-09-15');
+  });
+
+  it('template_id !== null → recurrence="daily" (simplified: UI 看到非 none 会拦截)', () => {
+    const task = makeTaskRow({ template_id: 'template-uuid-3333-3333-3333-333333333333' });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.recurrence).toBe('daily');
+  });
+
+  it('template_id null → recurrence="none"', () => {
+    const task = makeTaskRow({ template_id: null });
+    const state = fromTask(task, FAMILY_MEMBERS, CREATOR_ID, '2026-09-22');
+    expect(state.recurrence).toBe('none');
+  });
+});
+
+describe('toUpdateTaskInput (T-US003-1)', () => {
+  it('returns UpdateTaskInput with shape matching service contract', () => {
+    const form = makeBaseForm({
+      title: '喂奶粉',
+      taskDate: '2026-09-22',
+      dateChip: 'custom',
+      timeChip: 'custom',
+      taskTime: '20:00',
+      description: '7 勺奶粉',
+      share: 'sharedView',
+    });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+
+    expect(input.title).toBe('喂奶粉');
+    expect(input.taskDate).toBe('2026-09-22');
+    expect(input.taskTime).toBe('20:00');
+    expect(input.assigneeId).toBe(CREATOR_ID);
+    expect(input.description).toBe('7 勺奶粉');
+    expect(input.isSharedView).toBe(true);
+  });
+
+  it('timeChip=none → taskTime=null (preserves "no time" intent)', () => {
+    const form = makeBaseForm({ timeChip: 'none', taskTime: '' });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    expect(input.taskTime).toBeNull();
+  });
+
+  it('timeChip=custom, taskTime="20:30" → taskTime="20:30"', () => {
+    const form = makeBaseForm({ timeChip: 'custom', taskTime: '20:30' });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    expect(input.taskTime).toBe('20:30');
+  });
+
+  it('dateChip=custom → taskDate comes from form.taskDate', () => {
+    const form = makeBaseForm({
+      dateChip: 'custom',
+      taskDate: '2026-10-15',
+    });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    expect(input.taskDate).toBe('2026-10-15');
+  });
+
+  it('recurrence="daily" still translates (UI 拦截;本函数不做校验)', () => {
+    const form = makeBaseForm({ title: '喂奶粉', recurrence: 'daily' });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    // recurrence 不在 UpdateTaskInput 字段里(本期不支持),但函数仍应成功返回
+    expect(input.title).toBe('喂奶粉');
+  });
+
+  it('description with whitespace trims and becomes null when empty', () => {
+    const form = makeBaseForm({ title: 't', description: '   ' });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    expect(input.description).toBeNull();
+  });
+
+  it('share=private → isSharedView=false', () => {
+    const form = makeBaseForm({ share: 'private' });
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW);
+    expect(input.isSharedView).toBe(false);
+  });
+
+  it('does not include template_id / family_id / created_by (UpdateTaskInput 不需要)', () => {
+    const form = makeBaseForm();
+    const input = toUpdateTaskInput(form, CREATOR_ID, FIXED_NOW) as unknown as Record<string, unknown>;
+    expect(input.template_id).toBeUndefined();
+    expect(input.family_id).toBeUndefined();
+    expect(input.created_by).toBeUndefined();
   });
 });
