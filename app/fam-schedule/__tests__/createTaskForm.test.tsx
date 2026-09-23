@@ -24,8 +24,9 @@ import {
   mapDeleteFailureReason,
   mapCheckInFailureReason,
   mapCheckInResultToToast,
+  mapUndoCheckInFailureReason,
 } from '../src/lib/createTaskForm';
-import type { CheckInResult } from '../src/services/CheckInService';
+import type { CheckInResult, UndoCheckInFailureReason } from '../src/services/CheckInService';
 
 describe('createTaskForm.mapDeleteFailureReason', () => {
   it('translates "not_authenticated" to "请先登录"', () => {
@@ -253,5 +254,90 @@ describe('createTaskForm.mapCheckInResultToToast — T-US005-2', () => {
       // variant 必须是合法值
       expect(['success', 'spouse_completed', 'error']).toContain(toast.variant);
     }
+  });
+});
+
+// =====================================================================
+// T-US005-3: mapUndoCheckInFailureReason — 撤销失败 reason 翻译(8 reasons)
+// =====================================================================
+//
+// 文案(任务 brief §A-7 明确翻译表):
+//   not_authenticated     → "请先登录"
+//   no_family             → "你还没加入家庭"
+//   task_not_found        → "任务不存在或已被删除"
+//   not_owner             → "只有打卡人可以撤销"
+//   task_not_checked_in   → "尚未打卡,无需撤销"
+//   undo_window_expired   → "撤销窗口已过期,无法撤销"
+//   rls_denied            → "没有撤销权限"
+//   unknown               → "撤销失败,请重试"
+
+describe('createTaskForm.mapUndoCheckInFailureReason — T-US005-3', () => {
+  it('translates "not_authenticated" to "请先登录"', () => {
+    expect(mapUndoCheckInFailureReason('not_authenticated')).toBe('请先登录');
+  });
+
+  it('translates "no_family" to "你还没加入家庭"', () => {
+    expect(mapUndoCheckInFailureReason('no_family')).toBe('你还没加入家庭');
+  });
+
+  it('translates "task_not_found" to "任务不存在或已被删除"', () => {
+    expect(mapUndoCheckInFailureReason('task_not_found')).toBe('任务不存在或已被删除');
+  });
+
+  it('translates "not_owner" to "只有打卡人可以撤销"', () => {
+    expect(mapUndoCheckInFailureReason('not_owner')).toBe('只有打卡人可以撤销');
+  });
+
+  it('translates "task_not_checked_in" to "尚未打卡,无需撤销"', () => {
+    expect(mapUndoCheckInFailureReason('task_not_checked_in')).toBe('尚未打卡,无需撤销');
+  });
+
+  it('translates "undo_window_expired" to "撤销窗口已过期,无法撤销"', () => {
+    expect(mapUndoCheckInFailureReason('undo_window_expired')).toBe(
+      '撤销窗口已过期,无法撤销',
+    );
+  });
+
+  it('translates "rls_denied" to "没有撤销权限"', () => {
+    expect(mapUndoCheckInFailureReason('rls_denied')).toBe('没有撤销权限');
+  });
+
+  it('translates "unknown" to "撤销失败,请重试"', () => {
+    expect(mapUndoCheckInFailureReason('unknown')).toBe('撤销失败,请重试');
+  });
+
+  it('all 8 reasons produce a non-empty Chinese string (defense / coverage bar)', () => {
+    const reasons: UndoCheckInFailureReason[] = [
+      'not_authenticated',
+      'no_family',
+      'task_not_found',
+      'not_owner',
+      'task_not_checked_in',
+      'undo_window_expired',
+      'rls_denied',
+      'unknown',
+    ];
+    for (const r of reasons) {
+      const msg = mapUndoCheckInFailureReason(r);
+      expect(typeof msg).toBe('string');
+      expect(msg.length).toBeGreaterThan(0);
+      expect(msg).toMatch(/[\u4e00-\u9fff]/);
+    }
+  });
+
+  it('"undo_window_expired" label mentions window expired (distinct UX hint)', () => {
+    // UX 守卫:撤销特定的"窗口已过期"文案要明确时间维度,避免被复用为通用错误
+    expect(mapUndoCheckInFailureReason('undo_window_expired')).toContain('窗口');
+    expect(mapUndoCheckInFailureReason('undo_window_expired')).toContain('过期');
+  });
+
+  it('"task_not_checked_in" label distinguishes from generic "task_not_found"', () => {
+    // UX 守卫:虽然都是 task 维度的失败,但撤销对未打卡任务的提示应区分
+    // - task_not_found → "任务不存在或已被删除"
+    // - task_not_checked_in → "尚未打卡,无需撤销"
+    // 两条文案不应混淆
+    expect(mapUndoCheckInFailureReason('task_not_checked_in')).not.toBe(
+      mapUndoCheckInFailureReason('task_not_found'),
+    );
   });
 });

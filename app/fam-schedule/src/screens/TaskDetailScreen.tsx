@@ -90,7 +90,12 @@ import {
 import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
-import { mapDeleteFailureReason, mapCheckInFailureReason, mapCheckInResultToToast } from '../lib/createTaskForm';
+import {
+  mapDeleteFailureReason,
+  mapCheckInFailureReason,
+  mapCheckInResultToToast,
+  mapUndoCheckInFailureReason,
+} from '../lib/createTaskForm';
 import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
 import { showConfirmDialog } from '../components/ConfirmDialog';
@@ -131,6 +136,9 @@ const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';
 const CHECKIN_FAILED_TITLE = '打卡失败';
 /** T-US005-2:配偶先完成 Alert / 失败 Alert 按钮 label */
 const CHECKIN_OK_LABEL = '好';
+
+/** T-US005-3:撤销失败 Alert 标题 */
+const UNDO_FAILED_TITLE = '撤销失败';
 
 const TASK_NOT_FOUND_TITLE = '任务不存在';
 const TASK_NOT_FOUND_MESSAGE = '这条任务可能已被删除,正在返回';
@@ -259,6 +267,35 @@ export function TaskDetailScreen(): React.JSX.Element {
         );
       }
       // 成功 noop:Realtime 自动合并 + UI 通过 getCheckInState 自然切换
+    },
+    [],
+  );
+
+  /**
+   * 撤销打卡回调(T-US005-3)— 详情页 UndoChip 点击触发(5 分钟内可见)。
+   *
+   * 行为:
+   *   - 调 CheckInService.undoCheckin(taskId)— 走 SyncManager.enqueueAndApply
+   *     乐观更新(LocalStore 立即清 completed_at / completed_by)+ 入队 +
+   *     在线即触发 RPC(ADR-005 contract 守住)
+   *   - 失败 → Alert "撤销失败" + mapUndoCheckInFailureReason 翻译(8 reasons)
+   *   - 成功 → noop:UI 自然切回 todo 视觉 + Realtime 推送完成后 refresh
+   *
+   * 简化决策(任务 brief §C 明确不在范围):
+   *   - ❌ 撤销二次确认 Dialog(任务 brief 简化)
+   *   - ❌ iOS Toast(realtime 后 UI 自然感知)— 当前 noop
+   */
+  const handleTaskUndo = useCallback(
+    async (taskArg: Task): Promise<void> => {
+      const result = await CheckInService.undoCheckin(taskArg.id);
+      if (result.status === 'failed') {
+        Alert.alert(
+          UNDO_FAILED_TITLE,
+          mapUndoCheckInFailureReason(result.reason),
+          [{ text: CHECKIN_OK_LABEL, style: 'default' }],
+        );
+      }
+      // undone → 不弹 toast:UI 自然切回 todo 视觉
     },
     [],
   );
@@ -427,6 +464,8 @@ export function TaskDetailScreen(): React.JSX.Element {
                 currentUserId={currentUserId}
                 today={today}
                 onCheckIn={handleCheckIn}
+                // T-US005-3:撤销入口
+                onUndo={handleTaskUndo}
               />
             </XStack>
           </YStack>

@@ -1,5 +1,9 @@
 /**
- * CheckInService — 一键打卡 service — T-US005-1 + T-US005-2
+ * CheckInService — 一键打卡 service — T-US005-1 + T-US005-2 + T-US005-3
+ *
+ * T-US005-3 新增:`undoCheckin(taskId)` — 5 分钟内撤销打卡。
+ *   走 SyncManager.enqueueAndApply({kind: 'undo_checkin', taskId, queuedAt})(ADR-005 contract);
+ *   服务端原子 SQL `undo_checkin` 在 SyncManager.executeOnServer 内被调(line 521-530)。
  *
  * 职责(task 维度打卡写操作 — 一次性 + 周期任务统一入口):
  *   1. checkin(taskId, isMakeup) → 调 RPC `checkin_task`(US-005 主线入口)
@@ -53,6 +57,7 @@ import { enqueueAndApply } from '../lib/SyncManager';
 import { getTasks, type Task } from '../lib/LocalStore';
 import { getMyFamily } from './FamilyService';
 import type { TaskRow } from '../types/database';
+import { UNDO_WINDOW_MS } from '../lib/checkIn';
 
 // =====================================================================
 // 0. Internal helpers
@@ -65,6 +70,9 @@ import type { TaskRow } from '../types/database';
  * 可优化为 event-driven(订阅 SyncManager event),但留 T-FIX-06 polish。
  *
  * ⚠️ 测试用:jest fake timer 可控 — 真实环境 RN 跨平台一致行为。
+ *
+ * T-US005-3 复用同一个值:撤销走 SyncManager 同样需要 200-400ms 写 server + 100-200ms
+ * refetch round-trip;Sleep(500) 已是 project-wide 复用值(同于 checkin path)。
  */
 const SPOUSE_DETECT_DELAY_MS = 500;
 
@@ -344,7 +352,222 @@ export async function checkin(taskId: string, isMakeup: boolean = false): Promis
 }
 
 // =====================================================================
-// 3. 测试 / 调试出口
+// 3. T-US005-3: Undo 失败原因 + undoCheckin
+// =====================================================================
+
+/**
+ * `undoCheckin` 失败 reason 的封闭集合 — 服务端语义错误(非网络/非业务)。
+ *
+ * 与 checkin 的差异(T-US005-3 新增 reason):
+ *   - 'not_owner'           : 只有打卡人(completed_by === user.id)可以撤销自己的打卡
+ *                             — checkin 没有这个 reason(任何家庭成员都可打卡,协作)
+ *   - 'task_not_checked_in' : task.completed_at 已是 null — 没有打卡可撤销(客户端预判)
+ *                             — checkin 没有(已 completed_at 走幂等 success,不报 failed)
+ *   - 'undo_window_expired' : task.completed_at 距今 > 5 分钟,撤销窗口过期
+ *                             — checkin 没有(没有时间窗口限制)
+ *   - 其余 5 个与 checkin 共享:not_authenticated / no_family / task_not_found /
+ *     rls_denied / unknown
+ *
+ * UI 翻译(createTaskForm.mapUndoCheckInFailureReason):
+ *   - not_authenticated   → "请先登录"
+ *   - no_family           → "你还没加入家庭"
+ *   - task_not_found      → "任务不存在或已被删除"
+ *   - not_owner           → "只有打卡人可以撤销"
+ *   - task_not_checked_in → "尚未打卡,无需撤销"
+ *   - undo_window_expired → "撤销窗口已过期,无法撤销"
+ *   - rls_denied          → "没有撤销权限"
+ *   - unknown             → "撤销失败,请重试"
+ */
+export type UndoCheckInFailureReason =
+  | 'not_authenticated'
+  | 'no_family'
+  | 'task_not_found'
+  | 'not_owner'
+  | 'task_not_checked_in'
+  | 'undo_window_expired'
+  | 'rls_denied'
+  | 'unknown';
+
+/** `undoCheckin` 的结构化返回。 */
+export type UndoCheckInResult =
+  | {
+      /** 撤销成功(task 已 optimistic 标 completed_at = null;Realtime 校正中) */
+      status: 'undone';
+      taskId: string;
+    }
+  | { status: 'failed'; reason: UndoCheckInFailureReason };
+
+/**
+ * 撤销打卡 — T-US005-3 主线入口。
+ *
+ * 流程:
+ *   1. **pre-check**:`getMyFamily()` 必须非 null
+ *      - null → failed{reason: 'no_family'} 兜底
+ *   2. 拿当前 `user.id`(`supabase.auth.getUser()`)
+ *      - 失败 → failed{reason: 'not_authenticated'}
+ *   3. **预读 task 状态**:`SELECT id, created_by, completed_at, completed_by, cancelled
+ *      FROM tasks WHERE id = ?`
+ *      - error 含 'rls' / 'policy' → failed{reason: 'rls_denied'}
+ *      - 其它 error → failed{reason: 'unknown'}
+ *      - data = null(无错误) → failed{reason: 'task_not_found'}
+ *      - data.completed_at === null → failed{reason: 'task_not_checked_in'}
+ *        (没打卡不能撤销;这与 checkin 的幂等 path 不同 — 撤销对未打卡任务是错误)
+ *      - data.completed_by !== currentUserId → failed{reason: 'not_owner'}
+ *        (只能撤销自己打的卡;配偶完成的任务不能被本人撤销,留 T-US005-4 历史视角时再考虑)
+ *      - data.completed_at 距 now > UNDO_WINDOW_MS(5 分钟)→
+ *        failed{reason: 'undo_window_expired'}
+ *   4. **enqueueAndApply**({kind: 'undo_checkin', taskId, queuedAt: Date.now()}):
+ *      - 走 SyncManager enqueueAndApply 触发:
+ *        a) applyOptimisticUpdate:LocalStore.tasks 立即清 completed_at / completed_by
+ *        b) enqueueMutation:写 AsyncStorage FIFO queue(供离线时 replay)
+ *        c) isOnline → 立即 replayQueue:executeOnServer → supabase.rpc('undo_checkin')
+ *      - 任意内部错误由 SyncManager 自身 swallow + console.warn
+ *
+ * ⚠️ AD-005 contract:`undoCheckin` **不**直接调 supabase.rpc — 走 SyncManager
+ *   这是 ADR-005 line 28-31 契约:`checkin / undo_checkin → supabase.rpc()(原子 SQL)`
+ *   `必须经 SyncManager queue 走`,否则破坏离线写队列。
+ *   任何"为了简单直接调 RPC"的诱惑都视为合约破坏。
+ *
+ *   5. **T-US005-3 0 行处理 — sleep(500) + 单 task refetch**(复用 checkin 的 spouse_completed
+ *      模式):
+ *      - 等 SyncManager.replayQueue 走完 RPC
+ *      - refetch `SELECT id, completed_at FROM tasks WHERE id = ?`
+ *      - refetch 返回 `completed_at === null` → undone(server 已撤销成功)
+ *      - refetch 失败 / null row → fallback 乐观 `undone`(Realtime 推送时自然校正)
+ *      - 防御:若 refetch 显示 `completed_at !== null`(被配偶再次打卡?— race)— 乐观
+ *        undone 让 UI 切回 todo;Realtime 会 push 新 completed_at,UI 自动接受
+ *
+ * 简化决策(任务 brief §C 明确不在范围):
+ *   - ❌ 不做撤销二次确认 Dialog(本任务点击直接撤销 + UI 切回 todo 自然感知)
+ *   - ❌ 配偶撤销(本任务只允许 completed_by === user.id 的撤销;后续 T-US009 多人协作
+ *      再扩展"管理员可代撤")
+ *   - ❌ 撤销入口配置化(UNDO_WINDOW_MS 硬编码 5 分钟对齐 design §3.3;family_settings
+ *      留后续)
+ */
+export async function undoCheckin(taskId: string): Promise<UndoCheckInResult> {
+  // 1. Pre-check:必须在 family 里
+  const family = await getMyFamily();
+  if (!family) {
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] undoCheckin called but user has no family');
+    return { status: 'failed', reason: 'no_family' };
+  }
+
+  // 2. 拿当前 user.id
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData.user) {
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] undoCheckin: getUser failed:', userErr?.message);
+    return { status: 'failed', reason: 'not_authenticated' };
+  }
+  const currentUserId = userData.user.id;
+
+  // 3. 预读 task 状态(6 字段 — 含 cancelled / created_by 用于 not_owner / cancelled 防御)
+  type PreCheckRow = Pick<
+    TaskRow,
+    'id' | 'created_by' | 'completed_at' | 'completed_by' | 'cancelled'
+  >;
+  const { data: row, error: fetchErr } = await supabase
+    .from('tasks')
+    .select('id, created_by, completed_at, completed_by, cancelled')
+    .eq('id', taskId)
+    .maybeSingle<PreCheckRow>();
+
+  if (fetchErr) {
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] undoCheckin: fetch task error:', fetchErr.message);
+    if (
+      fetchErr.message.includes('rls') ||
+      fetchErr.message.includes('policy') ||
+      fetchErr.message.includes('row-level security')
+    ) {
+      return { status: 'failed', reason: 'rls_denied' };
+    }
+    return { status: 'failed', reason: 'unknown' };
+  }
+
+  if (!row) {
+    return { status: 'failed', reason: 'task_not_found' };
+  }
+
+  // 3a. task 没打卡 → 撤销无意义(只针对已 completed_at 的任务)
+  if (row.completed_at === null || row.completed_at === undefined) {
+    return { status: 'failed', reason: 'task_not_checked_in' };
+  }
+
+  // 3b. completed_by !== currentUserId → 不是我的打卡,不能撤销
+  //     (防御:completed_by 可能为 null — 视为孤儿完成,fail-closed:不让自己撤销)
+  if (row.completed_by === null || row.completed_by !== currentUserId) {
+    return { status: 'failed', reason: 'not_owner' };
+  }
+
+  // 3c. 撤销窗口 5 分钟检查 — 比较 ISO 时间戳距 now 是否超过 UNDO_WINDOW_MS
+  const completedMs = new Date(row.completed_at).getTime();
+  if (Number.isFinite(completedMs)) {
+    const elapsed = Date.now() - completedMs;
+    if (elapsed > UNDO_WINDOW_MS) {
+      return { status: 'failed', reason: 'undo_window_expired' };
+    }
+  }
+  // 防御:completed_at ISO 非法时(理论上不应该)→ 跳过 window 检查,继续 enqueue
+  // 由 server RPC 兜底拒绝;客户端不阻断
+
+  // 4. 调 SyncManager.enqueueAndApply(乐观更新 + 入队 + 在线触发 replay)
+  //
+  // AD-005 契约:undo_checkin 必须走 SyncManager(不能旁路 supabase.rpc)— 否则破坏
+  // 离线写队列。enqueueAndApply 内部:
+  //   - applyOptimisticUpdate:LocalStore.tasks set completed_at=null / completed_by=null
+  //   - enqueueMutation:写 AsyncStorage FIFO queue
+  //   - isOnline → replayQueue → executeOnServer → supabase.rpc('undo_checkin',
+  //     { p_task_id: taskId })(SyncManager.ts:521-525)
+  await enqueueAndApply({
+    kind: 'undo_checkin',
+    taskId,
+    queuedAt: Date.now(),
+  });
+
+  // 5. T-US005-3: 主动 refetch 确认 RPC 结果(复用 SPOUSE_DETECT_DELAY_MS)
+  //
+  // 流程:
+  //   - sleep(500) 等 SyncManager.replayQueue 走完 RPC
+  //   - refetch tasks WHERE id = ?;若 completed_at === null → server 已撤销成功
+  //   - refetch 失败 / null row → fallback 乐观 undone(Realtime channel 兜底)
+  await sleep(SPOUSE_DETECT_DELAY_MS);
+
+  type RefetchRow = Pick<TaskRow, 'id' | 'completed_at'>;
+  const { data: refetched, error: refetchErr } = await supabase
+    .from('tasks')
+    .select('id, completed_at')
+    .eq('id', taskId)
+    .maybeSingle<RefetchRow>();
+
+  if (refetchErr) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[CheckInService] undoCheckin: refetch failed, fallback to undone:',
+      refetchErr.message,
+    );
+    return { status: 'undone', taskId };
+  }
+
+  if (!refetched) {
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] undoCheckin: refetch returned null row, fallback to undone');
+    return { status: 'undone', taskId };
+  }
+
+  // refetched 成功 — completed_at === null → server 已撤销成功
+  if (refetched.completed_at === null || refetched.completed_at === undefined) {
+    return { status: 'undone', taskId: refetched.id };
+  }
+
+  // 防御:refetch 显示 completed_at !== null(race / 配偶再次完成)— 乐观 undone
+  // 让 UI 切回 todo;后续 Realtime 推送会自然校正
+  return { status: 'undone', taskId: refetched.id };
+}
+
+// =====================================================================
+// 4. 测试 / 调试出口
 // =====================================================================
 
 /**
@@ -370,4 +593,5 @@ export function _resetForTests(): void {
  */
 export const CheckInService = {
   checkin,
+  undoCheckin: undoCheckin,
 };

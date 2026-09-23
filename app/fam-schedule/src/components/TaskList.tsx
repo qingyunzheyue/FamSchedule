@@ -110,6 +110,12 @@ export interface TaskListProps {
   onTaskCheckIn?: (task: Task) => void | Promise<void>;
   /** T-US005-1 新增:用于判定 CheckInButton 状态 — 由 HomeScreen 注入。 */
   currentUserId?: string;
+  /**
+   * **T-US005-3 新增**:撤销打卡回调(透传给 TaskCard → CheckInButton.UndoChip)
+   * — 由消费方(HomeScreen)调 CheckInService.undoCheckin。可选 prop(不传则
+   * CheckInButton 不渲染 UndoChip,回到 T-US005-2 视觉)。
+   */
+  onTaskUndo?: (task: Task) => void | Promise<void>;
   onCreatePress: () => void;
 }
 
@@ -138,6 +144,7 @@ export function TaskList({
   onTaskPress,
   onTaskLongPress,
   onTaskCheckIn,
+  onTaskUndo,
   currentUserId = '',
   onCreatePress,
 }: TaskListProps): React.JSX.Element {
@@ -165,6 +172,7 @@ export function TaskList({
           onPress={onTaskPress}
           onLongPress={onTaskLongPress}
           onCheckIn={onTaskCheckIn}
+          onTaskUndo={onTaskUndo}
           currentUserId={currentUserId}
           today={today}
         />

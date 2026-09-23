@@ -37,7 +37,11 @@ import type {
   DeleteTaskFailureReason,
   UpdateTaskInput,
 } from '../services/TaskService';
-import type { CheckInFailureReason, CheckInResult } from '../services/CheckInService';
+import type {
+  CheckInFailureReason,
+  CheckInResult,
+  UndoCheckInFailureReason,
+} from '../services/CheckInService';
 import type { FamilyMemberRow, TaskRow } from '../types/database';
 
 // =====================================================================
@@ -705,5 +709,51 @@ export function mapCheckInResultToToast(
         body: mapCheckInFailureReason(result.reason),
         variant: 'error',
       };
+  }
+}
+
+// =====================================================================
+// 11. T-US005-3: Undo 失败 reason 翻译 — mapUndoCheckInFailureReason
+// =====================================================================
+
+/**
+ * 把 CheckInService.undoCheckin 的失败 reason 翻译成 UI 文案。
+ *
+ * 与 mapCheckInFailureReason / mapDeleteFailureReason 同模式(集中文案便于 i18n),
+ * UI 层(HomeScreen / TaskDetailScreen)直接 Alert.alert(翻译结果)。
+ *
+ * 文案(任务 brief §A-7 + 设计 task-detail-v1.0 §6):
+ *   - not_authenticated     → "请先登录"
+ *   - no_family             → "你还没加入家庭"
+ *   - task_not_found        → "任务不存在或已被删除"
+ *   - not_owner             → "只有打卡人可以撤销"
+ *   - task_not_checked_in   → "尚未打卡,无需撤销"
+ *   - undo_window_expired   → "撤销窗口已过期,无法撤销"
+ *   - rls_denied            → "没有撤销权限"
+ *   - unknown               → "撤销失败,请重试"
+ *
+ * 设计动机:
+ *   - 集中文案便于后续 i18n(react-i18next)
+ *   - TS exhaustiveness:对 UndoCheckInFailureReason 8 字段全部 case 覆盖;Switch 完整
+ *   - 防御:UI 在翻译失败(reason 不在集合内)→ 返回默认 '撤销失败,请重试'
+ */
+export function mapUndoCheckInFailureReason(reason: UndoCheckInFailureReason): string {
+  switch (reason) {
+    case 'not_authenticated':
+      return '请先登录';
+    case 'no_family':
+      return '你还没加入家庭';
+    case 'task_not_found':
+      return '任务不存在或已被删除';
+    case 'not_owner':
+      return '只有打卡人可以撤销';
+    case 'task_not_checked_in':
+      return '尚未打卡,无需撤销';
+    case 'undo_window_expired':
+      return '撤销窗口已过期,无法撤销';
+    case 'rls_denied':
+      return '没有撤销权限';
+    case 'unknown':
+      return '撤销失败,请重试';
   }
 }

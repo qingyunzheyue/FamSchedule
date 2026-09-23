@@ -111,13 +111,114 @@ export function getCheckInState(
  *
  * 规则:
  *   - 'todo'          : ✅ 可以(主要入口)
- *   - 'completed'     : ❌ 不可以(本任务不做 undo,留 T-US005-3)
+ *   - 'completed'     : ❌ 不可以(undo 入口独立 CheckInButton 内的 UndoChip 组件;
+ *                         见 T-US005-3)
  *   - 'cancelled'     : ❌ 不可以(Alert "任务已取消")
- *   - 'spouse_completed': ❌ 不可以(Alert "配偶已完成,无法撤销",留 T-US005-2 弹 toast 入口)
+ *   - 'spouse_completed': ❌ 不可以(Alert "配偶已完成,无法撤销")
  *
- * 注意:'completed' 是"我已完成",本任务明确不接 undo(任务 brief §C "撤销 留 T-US005-3");
- * 若后续接入 undo,把 completed 也返回 true 即可,然后 CheckInButton 调 undo_checkin 而非 checkin。
+ * 注意:T-US005-3 把撤销打卡入口单独抽到 `UndoChip`(只挂在 'completed' 视觉态右侧),
+ * CheckInButton 的 onPress 主圆圈保持只调 onCheckIn(todo) / Alert / noop(completed)。
  */
 export function canCheckIn(state: CheckInButtonState): boolean {
   return state.kind === 'todo';
+}
+
+// =====================================================================
+// 4. T-US005-3: 撤销倒计时派生 — getUndoCountdown(completedAt, now)
+// =====================================================================
+
+/**
+ * 撤销打卡的可撤销窗口长度(从 completed_at 起算)— T-US005-3 硬编码 5 分钟。
+ *
+ * 设计依据:
+ *   - 任务 detail-v1.0.md §3.3 "5 分钟内可撤销":设计明确 5 分钟
+ *   - ADR-005 / db-v1.1.sql §4.6:`undo_checkin` RPC 是 SECURITY DEFINER
+ *     没有强制 5 分钟窗口(client 端 pre-check + 后端 atomic SQL);
+ *     客户端发送前 pre-check failed 即可(若已超过 5 分钟不调 RPC)。
+ *   - 未来可配:family_settings.undo_window_ms(留后续任务;本任务硬编码对齐
+ *     设计 §3.3 视觉)
+ */
+export const UNDO_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * UndoChip 渲染所需的派生信息。纯派生(无副作用)— 注入 `now` 便于 jest 测试固定时间。
+ *
+ * - `canUndo`     : 是否显示撤销入口(仅完成 5 分钟内)
+ * - `remainingMs` : 剩余毫秒数(0 表示已过期)
+ * - `label`       : 撤销 button label(`↶ 撤销打卡 (4:32)` mm:ss 倒计时)
+ * - `a11yLabel`   : a11y 完整 label(`撤销打卡,剩余 4 分 32 秒`)
+ */
+export interface UndoCountdownState {
+  canUndo: boolean;
+  remainingMs: number;
+  label: string;
+  a11yLabel: string;
+}
+
+/**
+ * 给定 task.completed_at + 当前时间,导出 5 分钟撤销倒计时状态。
+ *
+ * 边界:
+ *   - `completedAt` 为 null/undefined/非法 ISO 字符串 → canUndo=false,
+ *     remainingMs=0,label='',a11yLabel='撤销窗口已过期'(防御)
+ *   - `now` 必须为 epoch ms(便于 jest fake timer)
+ *   - elapsed < 0(未来时间)→ 视为刚完成(remainingMs = UNDO_WINDOW_MS),
+ *     防御 Realtime 时序漂移(用户看到完成时,server 推送的 completed_at
+ *     可能本地时钟对不上,但期望撤销可用)
+ *   - 倒计时显示用 mm:ss 格式(minute / second 均 padStart 2)— 5:00 → "5:00",
+ *     0:00 → "0:00"
+ *   - a11y label 用中文"剩余 X 分 Y 秒"(不复用 mm:ss)— 屏幕阅读器朗读更自然
+ *
+ * @param completedAt — `task.completed_at` ISO 字符串
+ * @param now         — 当前 epoch ms(Date.now() 或 jest fake timer)
+ */
+export function getUndoCountdown(
+  completedAt: string | null | undefined,
+  now: number,
+): UndoCountdownState {
+  // 防御:null / undefined / 空串 / 非法 ISO
+  if (!completedAt) {
+    return {
+      canUndo: false,
+      remainingMs: 0,
+      label: '',
+      a11yLabel: '撤销窗口已过期',
+    };
+  }
+
+  const completedMs = new Date(completedAt).getTime();
+  if (!Number.isFinite(completedMs)) {
+    return {
+      canUndo: false,
+      remainingMs: 0,
+      label: '',
+      a11yLabel: '撤销窗口已过期',
+    };
+  }
+
+  const elapsed = now - completedMs;
+  // 防御 elapsed < 0(未来时间 / 时钟漂移)— 视为刚完成,满 5 分钟可用
+  const remainingMs = Math.max(0, UNDO_WINDOW_MS - (elapsed > 0 ? elapsed : 0));
+  const canUndo = remainingMs > 0;
+
+  if (!canUndo) {
+    return {
+      canUndo: false,
+      remainingMs: 0,
+      label: '',
+      a11yLabel: '撤销窗口已过期',
+    };
+  }
+
+  const totalSec = Math.floor(remainingMs / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  const mmSs = `${m}:${s.toString().padStart(2, '0')}`;
+
+  return {
+    canUndo: true,
+    remainingMs,
+    label: `↶ 撤销打卡 (${mmSs})`,
+    a11yLabel: `撤销打卡,剩余 ${m} 分 ${s} 秒`,
+  };
 }

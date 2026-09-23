@@ -150,6 +150,16 @@ export interface TaskCardProps {
   currentUserId?: string;
   /** T-US005-1 新增:今日日期 'YYYY-MM-DD'。 */
   today?: string;
+  /**
+   * **T-US005-3 新增**:撤销打卡回调(由父层 HomeScreen 调 CheckInService.undoCheckin)。
+   * 可选 prop — 不传则 CheckInButton 不渲染 UndoChip(回到 T-US005-2 视觉)。
+   *
+   * 视觉行为:
+   *   - 只在 `state.kind === 'completed'`(我已打卡)时 CheckInButton 右侧渲染 UndoChip
+   *   - 5 分钟倒计时自动消失(spouse_completed / cancelled / undo_window_expired 时 chip 隐藏)
+   *   - 点击 UndoChip → 透传 onTaskUndo(task)给父层
+   */
+  onTaskUndo?: (task: Task) => void | Promise<void>;
 }
 
 /**
@@ -169,6 +179,7 @@ function TaskCardImpl({
   onPress,
   onLongPress,
   onCheckIn,
+  onTaskUndo,
   currentUserId = '',
   today = '',
 }: TaskCardProps): React.JSX.Element {
@@ -195,6 +206,10 @@ function TaskCardImpl({
 
   const handleCheckInPress = (): void => {
     onCheckIn?.(task);
+  };
+
+  const handleUndoPress = (): void => {
+    onTaskUndo?.(task);
   };
 
   // a11y label — 综合 title / 时间 / 指派人 / 状态
@@ -254,6 +269,8 @@ function TaskCardImpl({
             currentUserId={currentUserId}
             today={today}
             onCheckIn={handleCheckInPress}
+            // T-US005-3:onUndo 透传 → 5 分钟内 UndoChip 渲染,点击调 onTaskUndo
+            onUndo={handleUndoPress}
           />
         </View>
       ) : (

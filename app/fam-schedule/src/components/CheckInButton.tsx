@@ -51,6 +51,7 @@ import {
 } from 'phosphor-react-native';
 
 import { canCheckIn, getCheckInState } from '../lib/checkIn';
+import { UndoChip } from './UndoChip';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -98,6 +99,24 @@ export interface CheckInButtonProps {
    * — 但消费方常需要 await 才能 catch Service 错误。
    */
   onCheckIn: (task: Task) => void | Promise<void>;
+  /**
+   * **T-US005-3 新增**:撤销打卡回调(消费方 HomeScreen / TaskDetailScreen 拿到 task 后调
+   * CheckInService.undoCheckin)。**可选** — 不传则右侧不显示 UndoChip(完全回到 T-US005-2
+   * 视觉)。
+   *
+   * - 何时调:用户点击 UndoChip(5 分钟倒计时内)— UndoChip 自行判 canUndo(canUndo=false
+   *   即 5 分钟过期 → 不显示 chip → 不存在点击入口)
+   * - 与 onCheckIn 走同一 service 模式(组件保持纯展示)— 消费方 await + catch 错误
+   *
+   * 设计动机:
+   *   - 可选 prop 让 CheckInButton 在不传 onUndo 时**视觉与 T-US005-2 完全一致**,
+   *     保持低耦合,避免不需要撤销的场景(留 T-US005-4 历史视角时可能单独撤销)
+   *   - 5 分钟过期 → UndoChip 自动消失,无需组件再判断
+   *   - Reorder:UnodChip 与 Pressable 在视觉上并列(右侧)— CheckInButton 控件外层仍
+   *     是一个 Pressable(打卡主圆圈),UndoChip 是嵌套的独立 Pressable,各自响应
+   *     自己的 onPress
+   */
+  onUndo?: (task: Task) => void | Promise<void>;
 }
 
 // =====================================================================
@@ -126,6 +145,7 @@ function CheckInButtonImpl({
   currentUserId,
   today,
   onCheckIn,
+  onUndo,
 }: CheckInButtonProps): React.JSX.Element {
   // 派生 state
   const state = getCheckInState(task, currentUserId, today);
@@ -178,6 +198,14 @@ function CheckInButtonImpl({
       </View>
     );
   } else if (state.kind === 'completed' || state.kind === 'spouse_completed') {
+    // T-US005-3 升级:在 completed 视觉态右侧渲染 UndoChip(只在我打卡的 completed 态;
+    // spouse_completed 不渲染 chip — 配偶完成的不能撤销,见 CheckInService.undoCheckin
+    // not_owner 校验)
+    const showUndo = state.kind === 'completed' && onUndo;
+    const undoElement = showUndo ? (
+      <UndoChip task={task} onUndo={onUndo} />
+    ) : null;
+
     button = (
       <View style={styles.completedWrap}>
         <View
@@ -196,6 +224,10 @@ function CheckInButtonImpl({
         >
           {state.label}
         </Text>
+        {undoElement ? (
+          // UndoChip 独立可访问(checkIn 已自带 a11y label)— 不包裹屏读
+          <View style={styles.undoSlot}>{undoElement}</View>
+        ) : null}
       </View>
     );
   } else {
@@ -256,12 +288,15 @@ export const CheckInButton = memo(CheckInButtonImpl);
 /**
  * 构造 Pressable 的 accessibilityLabel — 综合 title / 时间 / 状态语义。
  *
- * 设计 home-v1.0 §7:"打卡:喂奶粉,10:00";已完成 '已完成,点击撤销'。
- * 当前实现:
+ * 设计 home-v1.0 §7:"打卡:喂奶粉,10:00";已完成 '已完成 HH:MM'。
+ * 当前实现(T-US005-3 升级):
  *   - todo:           "打卡:<title> <HH:MM>" / "补打卡:<title> <HH:MM>"
- *   - completed:      "已完成 <HH:MM>,点击撤销(等 T-US005-3)"
+ *   - completed:      "已完成 <HH:MM>" (撤销入口独立由 UndoChip 处理,自带 a11y label)
  *   - spouse_completed: "配偶已完成,无法撤销"
  *   - cancelled:      "任务已取消"
+ *
+ * 注意:撤销 button 自身有独立 a11y(UndoChip 渲染)— 不与本 Pressable 的 a11y 重复。
+ * 所以 completed 态下主 Pressable 的 a11y label 不再"点击撤销"提示 — UndoChip 替代。
  *
  * ⚠️ 抽到本组件内的纯函数以便任务 brief §D 单测覆盖 a11y 字符串契约。
  */
@@ -278,7 +313,8 @@ function buildAccessibilityLabel(
         : `打卡:${title} ${time}`;
     case 'completed':
       // state.label = '✓ 已完成 HH:MM'(checkIn.ts 派生)
-      return `${state.label.replace('✓ ', '')},点击撤销`;
+      // T-US005-3 后:撤销入口独立由 UndoChip 处理,主 Pressable 的 a11y 只描述状态
+      return state.label.replace('✓ ', '');
     case 'spouse_completed':
       return '配偶已完成,无法撤销';
     case 'cancelled':
@@ -340,7 +376,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // 'completed' 容器:圆圈 + label 在右侧
+  // 'completed' 容器:圆圈 + label 在右侧 + (T-US005-3 撤销 chip 在 label 右侧)
   completedWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -350,6 +386,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: COLOR_SUCCESS,
+  },
+  /** T-US005-3:撤销 chip 容器(在 completed label 右侧,gap=6) */
+  undoSlot: {
+    marginLeft: 2,
   },
   labelMuted: {
     color: COLOR_MUTED,

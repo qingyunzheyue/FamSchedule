@@ -173,7 +173,8 @@ jest.mock('../src/lib/SyncManager', () => {
 
 // ---- Imports(mock 之后)-----------------------------------------------
 
-import { checkin, _resetForTests } from '../src/services/CheckInService';
+import { checkin, undoCheckin, _resetForTests } from '../src/services/CheckInService';
+import { UNDO_WINDOW_MS } from '../src/lib/checkIn';
 
 // ---- Test fixtures ----------------------------------------------------
 
@@ -803,5 +804,406 @@ describe('CheckInService.checkin — T-US005-2 spouse_completed (0 行 RPC 返�
       ([t]: [string]) => t === 'tasks',
     );
     expect(fromTasksCalls.length).toBe(1);
+  });
+});
+
+// =====================================================================
+// T-US005-3: undoCheckin — 撤销打卡(5 分钟内)
+// =====================================================================
+//
+// 设计动机(任务 brief §A-7 + 设计 task-detail-v1.0 §3.3):
+//   - 允许用户 5 分钟内反悔(误打卡 / 替配偶打卡后悔)
+//   - 走 SyncManager.enqueueAndApply(ADR-005 contract 守住)
+//   - 预读 task state 校验 → not_owner / task_not_checked_in / undo_window_expired
+//   - 失败原因 8 种 → Alert 弹"撤销失败" + mapUndoCheckInFailureReason 翻译
+//
+// 关键约束:
+//   - **ADR-005 contract**:Test 必须显式 `expect(mockRpc).not.toHaveBeenCalled()`
+//     守住 undo 路径不旁路 SyncManager(同 checkin 测试模式)
+//   - pre-check 6 字段:id, created_by, completed_at, completed_by, cancelled
+//   - refetch 2 字段:id, completed_at
+//
+// 覆盖范围(~10 cases):
+//   - happy path:refetch shows completed_at=null → undone
+//   - 失败 7 种:not_authenticated / no_family / task_not_found / not_owner /
+//     task_not_checked_in / undo_window_expired / rls_denied / unknown
+//   - ADR-005 contract 守卫
+//   - refetch 失败 fallback 到 optimistic undone
+
+/**
+ * 配置 undoCheckin 的 SELECT 响应序列:
+ *   - 1st: pre-check(5-字段 row: id, created_by, completed_at, completed_by, cancelled)
+ *   - 2nd: refetch(2-字段 row: id, completed_at)
+ */
+function setMockUndoSelectWithRefetch(
+  preCheck: {
+    id?: string;
+    created_by?: string;
+    cancelled?: boolean;
+    completed_at?: string | null;
+    completed_by?: string | null;
+  } | null,
+  refetch: {
+    id?: string;
+    completed_at?: string | null;
+  } | null,
+  preCheckError?: string | null,
+  refetchError?: string | null,
+): void {
+  const builder = makeQueryBuilder();
+  builder.maybeSingle.mockResolvedValueOnce(
+    preCheckError
+      ? { data: null, error: { message: preCheckError } }
+      : {
+          data: preCheck
+            ? {
+                id: preCheck.id ?? TASK_ID,
+                created_by: preCheck.created_by ?? ME_ID,
+                cancelled: preCheck.cancelled ?? false,
+                completed_at: preCheck.completed_at ?? null,
+                completed_by: preCheck.completed_by ?? null,
+              }
+            : null,
+          error: null,
+        },
+  );
+  builder.maybeSingle.mockResolvedValueOnce(
+    refetchError
+      ? { data: null, error: { message: refetchError } }
+      : {
+          data: refetch
+            ? {
+                id: refetch.id ?? TASK_ID,
+                completed_at: refetch.completed_at ?? null,
+              }
+            : null,
+          error: null,
+        },
+  );
+  mockSupabaseFrom.mockImplementation((t: string) =>
+    t === 'tasks' ? builder : makeQueryBuilder(),
+  );
+}
+
+/**
+ * 默认测试 fixture:任务已 by ME 完成,completed_at = now - 1min(5 分钟内可撤销)。
+ */
+function setupUndoHappyFixture(): void {
+  setMockFamily(FAMILY_ID);
+  // completedAt = 1 分钟前(< UNDO_WINDOW_MS)
+  const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+  setMockUndoSelectWithRefetch(
+    {
+      id: TASK_ID,
+      created_by: ME_ID,
+      cancelled: false,
+      completed_at: oneMinuteAgo,
+      completed_by: ME_ID,
+    },
+    { id: TASK_ID, completed_at: null },
+  );
+}
+
+describe('CheckInService.undoCheckin — happy path (T-US005-3)', () => {
+  it('returns undone when refetch shows completed_at = null', async () => {
+    setupUndoHappyFixture();
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('undone');
+    if (result.status === 'undone') {
+      expect(result.taskId).toBe(TASK_ID);
+    }
+  });
+
+  it('enqueues undo_checkin mutation with correct shape', async () => {
+    setupUndoHappyFixture();
+
+    await undoCheckin(TASK_ID);
+
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+    const mutation = mockEnqueueAndApply.mock.calls[0][0];
+    expect(mutation.kind).toBe('undo_checkin');
+    expect(mutation.taskId).toBe(TASK_ID);
+    expect(typeof mutation.queuedAt).toBe('number');
+  });
+
+  it('preserves ADR-005 contract: supabase.rpc NEVER called by undoCheckin', async () => {
+    setupUndoHappyFixture();
+
+    await undoCheckin(TASK_ID);
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('performs pre-check + refetch SELECT round-trip (2 calls to from("tasks"))', async () => {
+    setupUndoHappyFixture();
+
+    await undoCheckin(TASK_ID);
+
+    const fromTasksCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromTasksCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('falls back to undone when refetch returns completed_at (race — 配偶重新打卡 after 撤销)', async () => {
+    // 防御:refetch 显示 completed_at !== null(race / spouse 重新打卡)— 仍返回 undone
+    // 让 UI 切回 todo,Realtime 后续推送会自动收敛
+    setMockFamily(FAMILY_ID);
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: oneMinuteAgo,
+        completed_by: ME_ID,
+      },
+      // refetch 显示又有 completed_at(被 spouse 抢回)
+      { id: TASK_ID, completed_at: '2026-09-23T10:45:00Z' },
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('undone');
+  });
+});
+
+describe('CheckInService.undoCheckin — failure paths (T-US005-3, 8 reasons)', () => {
+  it('returns failed{reason:"no_family"} when getMyFamily returns null', async () => {
+    setMockFamily(null);
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('no_family');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+    expect(mockSupabaseFrom).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"not_authenticated"} when getUser returns null user', async () => {
+    setMockAuthUser(null);
+    setMockFamily(FAMILY_ID);
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_authenticated');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"task_not_found"} when SELECT returns null row', async () => {
+    setMockFamily(FAMILY_ID);
+    setMockUndoSelectWithRefetch(null, null);
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_not_found');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"task_not_checked_in"} when completed_at is null', async () => {
+    setMockFamily(FAMILY_ID);
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: null, // 没打卡
+        completed_by: null,
+      },
+      null,
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_not_checked_in');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"not_owner"} when completed_by !== currentUserId (配偶完成的任务)', async () => {
+    setMockFamily(FAMILY_ID);
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: oneMinuteAgo,
+        completed_by: SPOUSE_ID, // 配偶完成
+      },
+      null,
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_owner');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"not_owner"} when completed_by = null (orphan completion)', async () => {
+    // 防御:completed_at 非 null + completed_by = null(孤儿完成)— fail-closed,不让自己撤销
+    setMockFamily(FAMILY_ID);
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: oneMinuteAgo,
+        completed_by: null,
+      },
+      null,
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_owner');
+    }
+  });
+
+  it('returns failed{reason:"undo_window_expired"} when elapsed > 5 minutes', async () => {
+    setMockFamily(FAMILY_ID);
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: sixMinutesAgo,
+        completed_by: ME_ID,
+      },
+      null,
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('undo_window_expired');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"undo_window_expired"} at boundary elapsed = UNDO_WINDOW_MS + 1ms', async () => {
+    // 边界:elapsed > UNDO_WINDOW_MS 触发过期
+    setMockFamily(FAMILY_ID);
+    const justExpired = new Date(Date.now() - UNDO_WINDOW_MS - 1).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: justExpired,
+        completed_by: ME_ID,
+      },
+      null,
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('undo_window_expired');
+    }
+  });
+
+  it('allows undo at boundary elapsed = UNDO_WINDOW_MS - 1ms (still within window)', async () => {
+    // 边界:elapsed < UNDO_WINDOW_MS 仍可撤销
+    setMockFamily(FAMILY_ID);
+    const stillValid = new Date(Date.now() - (UNDO_WINDOW_MS - 1)).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: stillValid,
+        completed_by: ME_ID,
+      },
+      { id: TASK_ID, completed_at: null },
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('undone');
+  });
+
+  it('returns failed{reason:"rls_denied"} when SELECT error contains "rls"', async () => {
+    setMockFamily(FAMILY_ID);
+    setMockUndoSelectWithRefetch(
+      null,
+      null,
+      'new row violates row-level security policy for table "tasks"',
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('rls_denied');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+
+  it('returns failed{reason:"unknown"} when SELECT error is non-RLS', async () => {
+    setMockFamily(FAMILY_ID);
+    setMockUndoSelectWithRefetch(
+      null,
+      null,
+      'network timeout (PostgREST connection lost)',
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('unknown');
+    }
+  });
+
+  it('falls back to optimistic undone when refetch SELECT fails with network error', async () => {
+    // T-US005-3:refetch 失败(network err)→ fallback 乐观 undone(Realtime 兜底)
+    setMockFamily(FAMILY_ID);
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    setMockUndoSelectWithRefetch(
+      {
+        id: TASK_ID,
+        created_by: ME_ID,
+        cancelled: false,
+        completed_at: oneMinuteAgo,
+        completed_by: ME_ID,
+      },
+      null,
+      null,
+      'network timeout (PostgREST connection lost)',
+    );
+
+    const result = await undoCheckin(TASK_ID);
+
+    expect(result.status).toBe('undone');
+    if (result.status === 'undone') {
+      expect(result.taskId).toBe(TASK_ID);
+    }
+    // ADR-005 contract 仍守住(refetch fail ≠ 直接调 rpc,只是 fallback 乐观 success)
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
   });
 });

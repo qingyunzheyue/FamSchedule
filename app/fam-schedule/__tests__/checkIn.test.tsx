@@ -25,7 +25,12 @@
  */
 
 import type { Task } from '../src/lib/LocalStore';
-import { getCheckInState, canCheckIn } from '../src/lib/checkIn';
+import {
+  getCheckInState,
+  canCheckIn,
+  getUndoCountdown,
+  UNDO_WINDOW_MS,
+} from '../src/lib/checkIn';
 
 // =====================================================================
 // Test fixtures
@@ -245,5 +250,136 @@ describe('getCheckInState — purity / sanity', () => {
     const a = getCheckInState(task, ME_ID, TODAY);
     const b = getCheckInState(task, ME_ID, TODAY);
     expect(a).toEqual(b);
+  });
+});
+
+// =====================================================================
+// T-US005-3: getUndoCountdown — 撤销倒计时派生(8 cases)
+// =====================================================================
+//
+// 覆盖范围(任务 brief §D + 设计 task-detail-v1.0 §3.3 / §6):
+//   - 边界:elapsed = 0 / 1min / 4:59 / 5:00 / 5:01
+//   - 防御:null completedAt / undefined / invalid ISO
+//   - 时钟漂移:elapsed < 0(未来 time)— 防御,视为刚完成
+//   - mm:ss 格式:`5:00 / 4:32 / 0:00`
+//   - a11y label 中文格式
+//   - UNDO_WINDOW_MS = 5 * 60 * 1000
+
+describe('getUndoCountdown — T-US005-3', () => {
+  it('exports UNDO_WINDOW_MS = 5 minutes (300_000 ms)', () => {
+    expect(UNDO_WINDOW_MS).toBe(5 * 60 * 1000);
+  });
+
+  it('at elapsed=0 (just completed): canUndo=true, label "↶ 撤销打卡 (5:00)"', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const now = new Date(completedAt).getTime();
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(true);
+    expect(state.remainingMs).toBe(UNDO_WINDOW_MS);
+    expect(state.label).toBe('↶ 撤销打卡 (5:00)');
+    expect(state.a11yLabel).toBe('撤销打卡,剩余 5 分 0 秒');
+  });
+
+  it('at elapsed=1min: label "↶ 撤销打卡 (4:00)"', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + 60 * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(true);
+    expect(state.remainingMs).toBe(4 * 60 * 1000);
+    expect(state.label).toBe('↶ 撤销打卡 (4:00)');
+    expect(state.a11yLabel).toBe('撤销打卡,剩余 4 分 0 秒');
+  });
+
+  it('at elapsed=4min 28s: label "↶ 撤销打卡 (0:32)" (mm:ss padding)', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + (4 * 60 + 28) * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(true);
+    expect(state.remainingMs).toBe(32 * 1000);
+    expect(state.label).toBe('↶ 撤销打卡 (0:32)');
+    expect(state.a11yLabel).toBe('撤销打卡,剩余 0 分 32 秒');
+  });
+
+  it('at elapsed=4min 59s (last second): canUndo=true, remainingMs=1000', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + (4 * 60 + 59) * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(true);
+    expect(state.remainingMs).toBe(1000);
+    expect(state.label).toBe('↶ 撤销打卡 (0:01)');
+  });
+
+  it('at elapsed=5min exactly: canUndo=false (boundary expiring)', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + 5 * 60 * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(false);
+    expect(state.remainingMs).toBe(0);
+    expect(state.label).toBe('');
+    expect(state.a11yLabel).toBe('撤销窗口已过期');
+  });
+
+  it('at elapsed=5min 1s (already expired): canUndo=false', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + (5 * 60 + 1) * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(false);
+    expect(state.remainingMs).toBe(0);
+    expect(state.a11yLabel).toBe('撤销窗口已过期');
+  });
+
+  it('returns canUndo=false defensively when completedAt is null', () => {
+    const state = getUndoCountdown(null, Date.now());
+    expect(state.canUndo).toBe(false);
+    expect(state.remainingMs).toBe(0);
+    expect(state.label).toBe('');
+    expect(state.a11yLabel).toBe('撤销窗口已过期');
+  });
+
+  it('returns canUndo=false defensively when completedAt is undefined', () => {
+    const state = getUndoCountdown(undefined, Date.now());
+    expect(state.canUndo).toBe(false);
+    expect(state.a11yLabel).toBe('撤销窗口已过期');
+  });
+
+  it('returns canUndo=false when completedAt is invalid ISO string', () => {
+    const state = getUndoCountdown('not-an-iso', Date.now());
+    expect(state.canUndo).toBe(false);
+    expect(state.a11yLabel).toBe('撤销窗口已过期');
+  });
+
+  it('defends against clock skew (elapsed < 0, future completedAt): treats as just completed', () => {
+    // 防御:Realtime 推送或本地时钟漂移 — completedAt 比 now 还"未来"
+    // 期望:视为刚完成,满 5 分钟可撤销(canUndo=true)
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs - 2000; // 2 秒"未来"
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.canUndo).toBe(true);
+    expect(state.remainingMs).toBe(UNDO_WINDOW_MS);
+    expect(state.label).toBe('↶ 撤销打卡 (5:00)');
+  });
+
+  it('mm:ss format pads seconds to 2 digits ("0:05", "0:32", not "0:5")', () => {
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + (4 * 60 + 55) * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.label).toBe('↶ 撤销打卡 (0:05)');
+  });
+
+  it('a11y label uses "X 分 Y 秒" Chinese format (not mm:ss)', () => {
+    // 设置 now = completedMs + 28 sec elapsed → remaining = 4:32 → a11y "4 分 32 秒"
+    const completedAt = '2026-09-23T10:35:00Z';
+    const completedMs = new Date(completedAt).getTime();
+    const now = completedMs + 28 * 1000;
+    const state = getUndoCountdown(completedAt, now);
+    expect(state.a11yLabel).toBe('撤销打卡,剩余 4 分 32 秒');
+    expect(state.a11yLabel).not.toMatch(/\d+:\d+/); // 不应包含 mm:ss
   });
 });

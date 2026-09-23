@@ -63,7 +63,12 @@ import { useFamilyValue, useCurrentUserId } from '../contexts/FamilyContext';
 import { pullSince, useSyncManager, type PullStatus } from '../lib/SyncManager';
 import { getLastSyncAt } from '../lib/LocalStore';
 import { filterTasks, type ViewMode } from '../lib/taskListFilters';
-import { mapDeleteFailureReason, mapCheckInFailureReason, mapCheckInResultToToast } from '../lib/createTaskForm';
+import {
+  mapDeleteFailureReason,
+  mapCheckInFailureReason,
+  mapCheckInResultToToast,
+  mapUndoCheckInFailureReason,
+} from '../lib/createTaskForm';
 import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
 import { TaskService } from '../services/TaskService';
@@ -90,6 +95,10 @@ const ALERT_NETWORK_MESSAGE = '请检查网络连接后下拉刷新';
 /** T-US005-1 列表打卡失败标题 */
 const CHECKIN_FAILED_TITLE = '打卡失败';
 const CHECKIN_FAILED_OK_LABEL = '好';
+
+/** T-US005-3 撤销打卡失败标题 */
+const UNDO_FAILED_TITLE = '撤销失败';
+const UNDO_FAILED_OK_LABEL = '好';
 
 /** T-US005-2 列表打卡 — 配偶先完成提示按钮 label */
 const SPOUSE_COMPLETED_OK_LABEL = '好';
@@ -300,6 +309,35 @@ export function HomeScreen(): React.JSX.Element {
     [],
   );
 
+  // ---- 任务撤销 — T-US005-3 ----
+  //
+  // 列表 UndoChip 点击触发(5 分钟内可见)。
+  // 行为:
+  //   - 调 CheckInService.undoCheckin(taskId)— 走 SyncManager.enqueueAndApply
+  //     乐观更新(LocalStore 立即清 completed_at)+ 入队 + 在线即触发 RPC
+  //     (ADR-005 contract 守住 — 不直接 supabase.rpc)
+  //   - 失败 → Alert "撤销失败" + 翻译 reason(mapUndoCheckInFailureReason 8 reasons)
+  //   - 成功 → noop:UI 自然切回 todo 视觉(CheckInButton 4 状态由 getCheckInState 派生;
+  //                  Realtime 推送完成后 refresh,SyncManager 已订阅)
+  //
+  // 简化决策(任务 brief §C 明确不在范围):
+  //   - ❌ 撤销二次确认 Dialog:本任务点击直接撤销 + UI 自然切回
+  //   - ❌ iOS Toast(realtime 后 UI 自然感知)— 当前 noop
+  const handleTaskUndo = useCallback(
+    async (task: Task): Promise<void> => {
+      const result = await CheckInService.undoCheckin(task.id);
+      if (result.status === 'failed') {
+        Alert.alert(
+          UNDO_FAILED_TITLE,
+          mapUndoCheckInFailureReason(result.reason),
+          [{ text: UNDO_FAILED_OK_LABEL, style: 'default' }],
+        );
+      }
+      // undone → 不弹 toast:UI 自然切回 todo 视觉
+    },
+    [],
+  );
+
   // ---- 当前用户 ID(T-US005-1)— 透传给 CheckInButton 用于派生 me / spouse 视觉 ----
 
   const currentUserId = useCurrentUserId();
@@ -384,6 +422,7 @@ export function HomeScreen(): React.JSX.Element {
         onTaskPress={handleTaskPress}
         onTaskLongPress={handleTaskLongPress}
         onTaskCheckIn={handleTaskCheckIn}
+        onTaskUndo={handleTaskUndo}
         currentUserId={currentUserId}
         onCreatePress={handleCreatePress}
       />
