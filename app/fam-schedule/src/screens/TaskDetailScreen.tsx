@@ -1,47 +1,52 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 渲染 task-detail-v1.0.md §3.1 布局的**简化版**:
  *      - Header:← 返回 + 标题"任务详情" + 右上角 ⋮ 菜单
- *      - TaskHero:title + 时间行 + 主按钮区(占位 — 留 T-US005)
+ *      - TaskHero:title + 时间行 + **T-US005-1 新增** 主按钮区(CheckInButton 替换 placeholder)
  *      - 备注(如有)
  *      - 指派人
  *      - **省略**:共同执行人 / 共享设置 / 周期(留 T-US009 / T-US010 / T-US004-1)
- *      - 打卡历史(占位 — 留 T-US005)
+ *      - 打卡历史(占位 — 留 T-US005-4)
  *   4. ⋮ 菜单(任务 brief §A / §C.2 + T-US003-2):
  *      - 所有人可见:`复制为新任务` → Alert "即将推出"(留后续)
  *      - 创建者可见:`编辑` → router.push('/(main)/(home)/task-edit?id=...')
  *      - **创建者可见:`删除` → ConfirmDialog → TaskService.deleteTask**(T-US003-2)
+ *   5. **T-US005-1 新增**:CheckInButton 集成 → handleCheckIn → CheckInService.checkin →
+ *      失败 Alert(翻译 mapCheckInFailureReason)/ 成功 noop(乐观 UI 自然切换)
  *
  * 设计依据:
  *   - 任务 detail-v1.0.md §3.1 / §3.4 / §6 文案 / §7 a11y
- *   - 任务 brief §C.2 + T-US003-2 brief §C
+ *   - 任务 brief §C.2 + T-US003-2 brief §C + T-US005-1 brief §C.4
  *
  * 简化决策(明确记录 — dev self-acknowledge scope):
- *   - ❌ 不做打卡 button(留 T-US005)— 显示静态 placeholder "✓ 打卡(暂未启用)"
- *   - ❌ 不做撤销 button(留 T-US005)
+ *   - ❌ 不做撤销 button(留 T-US005-3)— CheckInButton 在 completed 态下点击 noop
  *   - ❌ 不做过期 banner(留 T-US014)
  *   - ✅ T-US003-2:删除走 RN Alert 二次确认(短期)→ 后续 polish 换 Tamagui Dialog
  *   - ❌ 模板任务删除(留 T-US004-1)— Alert "模板任务暂不支持删除"
  *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" 占位 Alert
+ *   - ✅ **T-US005-1**:CheckInButton 替换原 CHECKIN_PLACEHOLDER / COMPLETED_PLACEHOLDER
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
  *     切换到 `useCurrentUserId()`(与其他 2 个 screen 同一来源,集中一处)
  *
- * T-US003-2 行为:
- *   - **详情页删除**: 二次确认(更慎重,因 ⋮ 菜单是显式操作)
- *     - 模板任务 → Alert "模板任务暂不支持删除"(占位,留 T-US004-1)
- *     - 一次性任务 → ConfirmDialog → TaskService.deleteTask → Alert "已删除" + router.back
- *     - 失败 → Alert "删除失败" + mapDeleteFailureReason 翻译
+ * T-US005-1 行为:
+ *   - **CheckInButton 渲染在主按钮区**(testID="checkin-area")
+ *     - 4 状态视觉由 CheckInButton 自身派生(getCheckInState)
+ *     - cancelled → Alert "任务已取消"(CheckInButton 内部)
+ *     - 点击 todo → handleCheckIn → CheckInService.checkin → 失败 Alert / 成功 noop
+ *   - **handleCheckIn**:统一调 CheckInService;失败弹 Alert(翻译文案);成功不显式提示
+ *     (乐观 UI 通过 Realtime 自然切换 — SyncManager 已订阅 tasks 表)
  *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
  *   - 各分组 `accessibilityRole="summary"`
  *   - ⋮ 按钮 `accessibilityRole="button"` label "更多操作"
+ *   - CheckInButton 自带独立 a11y label(转给 task-detail §7)
  *
  * 测试策略:
  *   - **不**渲染组件本身(jest-expo + Tamagui 限制)
@@ -61,7 +66,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Text, XStack, YStack } from 'tamagui';
 import {
-  CheckCircle,
   Clock,
   DotsThreeVertical,
   Note,
@@ -71,9 +75,11 @@ import {
 import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
-import { mapDeleteFailureReason } from '../lib/createTaskForm';
+import { mapDeleteFailureReason, mapCheckInFailureReason } from '../lib/createTaskForm';
 import { TaskService } from '../services/TaskService';
+import { CheckInService } from '../services/CheckInService';
 import { showConfirmDialog } from '../components/ConfirmDialog';
+import { CheckInButton } from '../components/CheckInButton';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -104,10 +110,10 @@ const TEMPLATE_DELETE_BLOCKED_MESSAGE = '请先在家庭 Tab 解除模板关联'
 const SECTION_DESCRIPTION_LABEL = '备注';
 const SECTION_ASSIGNEE_LABEL = '指派人';
 const SECTION_HISTORY_LABEL = '打卡历史';
-const HISTORY_PLACEHOLDER = '打卡历史等 T-US005 接入';
+const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';
 
-const CHECKIN_PLACEHOLDER = '✓ 打卡(暂未启用)';
-const COMPLETED_PLACEHOLDER = '✓ 已完成';
+/** T-US005-1:打卡失败 Alert 标题 */
+const CHECKIN_FAILED_TITLE = '打卡失败';
 
 const TASK_NOT_FOUND_TITLE = '任务不存在';
 const TASK_NOT_FOUND_MESSAGE = '这条任务可能已被删除,正在返回';
@@ -124,7 +130,6 @@ const COLOR_BG = '#F4ECDC';
 const COLOR_TEXT_PRIMARY = '#3A2E20';
 const COLOR_TEXT_SECONDARY = '#7A6B57';
 const COLOR_WARNING = '#C95444';
-const COLOR_SUCCESS = '#5C9D7E';
 
 // =====================================================================
 // Component
@@ -183,8 +188,8 @@ export function TaskDetailScreen(): React.JSX.Element {
   );
 
   const isOwner = !!task && task.created_by === currentUserId;
-  const isCompleted = task?.completed_at != null;
-  const isCancelled = task?.cancelled === true;
+  // isCompleted / isCancelled 派生移至 TaskHero 子组件(任务 brief §C.4)+
+  // CheckInButton 自身 getCheckInState 派生独立的 4 状态视觉
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -205,6 +210,31 @@ export function TaskDetailScreen(): React.JSX.Element {
   const handleCopyAsNew = useCallback((): void => {
     Alert.alert('即将推出', COPY_AS_NEW_PLACEHOLDER);
   }, []);
+
+  /**
+   * 打卡回调(T-US005-1)— 详情页 CheckInButton 点击触发。
+   *
+   * 行为:
+   *   - 调 CheckInService.checkin(taskId, false)— 走 SyncManager.enqueueAndApply
+   *     乐观更新 + 入队 + 在线即触发 RPC(ADR-005 contract)
+   *   - 成功不显式提示 — UI 通过 Realtime 自然切换到 completed 态(乐观 UI)
+   *   - 失败 → Alert.alert(translated failure reason)— 翻译走 mapCheckInFailureReason
+   *
+   * 留后续:
+   *   - 配偶先完成的 toast 提示(T-US005-2)— 本任务 React 状态切换已 OK,但 Alert/toast
+   *     触发条件需要 0 行 RPC 返回处理,留 T-US005-2
+   *   - 5 分钟内撤销入口(T-US005-3)— 本任务 completed 态点击 noop
+   */
+  const handleCheckIn = useCallback(
+    async (taskArg: Task): Promise<void> => {
+      const result = await CheckInService.checkin(taskArg.id, false);
+      if (result.status === 'failed') {
+        Alert.alert(CHECKIN_FAILED_TITLE, mapCheckInFailureReason(result.reason));
+      }
+      // 成功 noop:Realtime 自动合并 + UI 通过 getCheckInState 自然切换
+    },
+    [],
+  );
 
   /**
    * 删除当前 task(T-US003-2):
@@ -353,7 +383,7 @@ export function TaskDetailScreen(): React.JSX.Element {
             testID="section-history"
           />
 
-          {/* 主操作区(留 T-US005 — 占位) */}
+          {/* 主操作区(T-US005-1:CheckInButton 替换原 placeholder)— 4 状态视觉由 CheckInButton 派生 */}
           <YStack
             marginTop="$lg"
             padding="$md"
@@ -364,30 +394,14 @@ export function TaskDetailScreen(): React.JSX.Element {
             accessibilityRole="summary"
             testID="checkin-area"
           >
-            {isCancelled ? (
-              <Text
-                fontSize="$body"
-                color={COLOR_TEXT_SECONDARY}
-                textAlign="center"
-              >
-                已取消
-              </Text>
-            ) : isCompleted ? (
-              <XStack alignItems="center" justifyContent="center" gap="$sm">
-                <CheckCircle size={20} color={COLOR_SUCCESS} weight="fill" />
-                <Text fontSize="$body" color={COLOR_SUCCESS} fontWeight="semibold">
-                  {COMPLETED_PLACEHOLDER}
-                </Text>
-              </XStack>
-            ) : (
-              <Text
-                fontSize="$body"
-                color={COLOR_WARNING}
-                textAlign="center"
-              >
-                {CHECKIN_PLACEHOLDER}
-              </Text>
-            )}
+            <XStack alignItems="center" justifyContent="center">
+              <CheckInButton
+                task={task}
+                currentUserId={currentUserId}
+                today={today}
+                onCheckIn={handleCheckIn}
+              />
+            </XStack>
           </YStack>
         </ScrollView>
       </YStack>

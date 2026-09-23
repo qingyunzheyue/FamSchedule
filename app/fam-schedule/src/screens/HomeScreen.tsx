@@ -1,7 +1,7 @@
 /**
- * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2
+ * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1
  *
- * 职责(US-002 故事 1/3 — 端到端任务可视化):
+ * 职责(US-002 故事 1/3 — 端到端任务可视化 + US-005 故事 1/4 — 列表打卡):
  *   1. mount 时通过 useSyncManager(familyId) 自动 subscribe + Realtime + pullSince
  *   2. 通过 useTasks() 订阅 SyncManager.tasksSnapshot,响应 setTasks / pullSince / realtime 变更
  *   3. URL `?view=today|week|all` 作为视图 source of truth,默认 today
@@ -9,6 +9,8 @@
  *   5. SegmentedTab 切换视图 + TaskList 渲染 TaskCard
  *   6. 下拉刷新 → pullSince,失败弹 Alert
  *   7. **T-US003-2**:列表 long-press 删除入口(简化版直接删,留 T-FIX-06 polish)
+ *   8. **T-US005-1 新增**:打卡回调(handleTaskCheckIn)→ 调 CheckInService.checkin
+ *      → 失败 Alert(翻译 mapCheckInFailureReason) / 成功 noop(乐观 UI 自然切换)
  *
  * 设计依据:
  *   - home-v1.0.md §3 布局 + §6 文案 + §7 a11y
@@ -18,11 +20,12 @@
  *   - **Header 简化版**:只渲染"任务列表"标题 + 右上角 + 按钮;不渲染大日期 + 时段问候
  *     (留 T-US002-2)。brief 明确说"❌ Header 大日期 + 时段问候"
  *   - **过期 banner**:无(留 T-US014 / T-US015)
- *   - **打卡 button**:无(留 T-US005)
  *   - **Skeleton / OfflineBanner**:无(留 Wave 3)
- *   - **TaskCard 点击**:跳 task/[id] 占位 wrapper(无副作用,等 T-US003 接入)
+ *   - **TaskCard 点击**:跳 task/[id](TaskDetailScreen)— T-US003-1 已闭环
  *   - **T-US003-2 列表 long-press 删除**:不走二次确认,直接删除 + Alert 已删除
- *     (留 T-FIX-06 polish 时加二次确认 — 与详情页删除二次确认差异化)
+ *   - **T-US005-1 列表打卡**:走乐观 UI — 点击 → CheckInService → SyncManager
+ *     enqueueAndApply → LocalStore 立即标 completed_at → useTasks() 自然刷新 → CheckInButton
+ *     切到 completed 视觉态。失败的 case 弹 Alert,成功的 noop。
  *
  * URL 同步:
  *   - view 参数是 router state(URL `?view=today`)。useSearchParams 读 → 渲染;
@@ -36,7 +39,8 @@
  * 不在本屏范围:
  *   - 任务详情页(T-US003)
  *   - 创建任务(走 router.push 到 task-create route,T-US001-1 已闭环)
- *   - 过期 banner / 打卡按钮 / Skeleton / 共同执行人 / 周期 / 共享(T-US002-2+ 后续)
+ *   - 过期 banner / Skeleton / 共同执行人 / 周期 / 共享(T-US002-2+ 后续)
+ *   - 打卡历史 / 撤销打卡 / 补卡(US-005 / US-006 后续任务)
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -46,14 +50,15 @@ import { Button, XStack, YStack } from 'tamagui';
 import { Plus, ListChecks } from 'phosphor-react-native';
 
 import { useTasks } from '../hooks/useTasks';
-import { useFamilyValue } from '../contexts/FamilyContext';
+import { useFamilyValue, useCurrentUserId } from '../contexts/FamilyContext';
 import { pullSince, useSyncManager, type PullStatus } from '../lib/SyncManager';
 import { getLastSyncAt } from '../lib/LocalStore';
 import { filterTasks, type ViewMode } from '../lib/taskListFilters';
-import { mapDeleteFailureReason } from '../lib/createTaskForm';
+import { mapDeleteFailureReason, mapCheckInFailureReason } from '../lib/createTaskForm';
 import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
 import { TaskService } from '../services/TaskService';
+import { CheckInService } from '../services/CheckInService';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -72,6 +77,10 @@ const ALERT_SYNC_TITLE = '同步未完成';
 const ALERT_SYNC_MESSAGE = '部分数据未拉到,稍后会自动重试';
 const ALERT_NETWORK_TITLE = '网络异常';
 const ALERT_NETWORK_MESSAGE = '请检查网络连接后下拉刷新';
+
+/** T-US005-1 列表打卡失败标题 */
+const CHECKIN_FAILED_TITLE = '打卡失败';
+const CHECKIN_FAILED_OK_LABEL = '好';
 
 /** T-US003-2 列表 long-press 删除文案 */
 const LONGPRESS_DELETED_TITLE = '已删除';
@@ -246,6 +255,36 @@ export function HomeScreen(): React.JSX.Element {
     }
   }, []);
 
+  // ---- 任务打卡 — T-US005-1 ----
+  //
+  // 列表 CheckInButton 点击触发。行为:
+  //   - 调 CheckInService.checkin(taskId, false)— 走 SyncManager.enqueueAndApply
+  //     乐观更新 + 入队 + 在线即触发 RPC(ADR-005 contract)
+  //   - 成功不显式提示 — useTasks() 通过 Realtime 自然更新 CheckInButton 视觉态
+  //     (cancelled / completed / spouse_completed / todo 4 状态)
+  //   - 失败 → Alert.alert(translated failure reason) + 单 OK 按钮
+  //
+  // 留后续:
+  //   - 配偶先完成的 toast 提示(T-US005-2)— 0 行 RPC 返回处理暂未接
+  //   - 5 分钟内撤销入口(T-US005-3)— CheckInButton completed 态点击目前 noop
+  const handleTaskCheckIn = useCallback(
+    async (task: Task): Promise<void> => {
+      const result = await CheckInService.checkin(task.id, false);
+      if (result.status === 'failed') {
+        Alert.alert(
+          CHECKIN_FAILED_TITLE,
+          mapCheckInFailureReason(result.reason),
+          [{ text: CHECKIN_FAILED_OK_LABEL, style: 'default' }],
+        );
+      }
+    },
+    [],
+  );
+
+  // ---- 当前用户 ID(T-US005-1)— 透传给 CheckInButton 用于派生 me / spouse 视觉 ----
+
+  const currentUserId = useCurrentUserId();
+
   // ---- 下拉刷新 ----
 
   const [refreshing, setRefreshing] = useState(false);
@@ -325,6 +364,8 @@ export function HomeScreen(): React.JSX.Element {
         onRefresh={onRefresh}
         onTaskPress={handleTaskPress}
         onTaskLongPress={handleTaskLongPress}
+        onTaskCheckIn={handleTaskCheckIn}
+        currentUserId={currentUserId}
         onCreatePress={handleCreatePress}
       />
     </YStack>

@@ -37,6 +37,7 @@ import type {
   DeleteTaskFailureReason,
   UpdateTaskInput,
 } from '../services/TaskService';
+import type { CheckInFailureReason } from '../services/CheckInService';
 import type { FamilyMemberRow, TaskRow } from '../types/database';
 
 // =====================================================================
@@ -590,5 +591,44 @@ export function mapDeleteFailureReason(reason: DeleteTaskFailureReason): string 
       return '没有删除权限';
     case 'unknown':
       return '删除失败,请重试';
+  }
+}
+
+// =====================================================================
+// 10. Check-in 失败 reason 翻译 — T-US005-1
+// =====================================================================
+
+/**
+ * 把 CheckInService.checkin 的失败 reason 翻译成 UI 文案。
+ *
+ * 与 mapDeleteFailureReason 同模式(任务 brief §B 错误文案集中映射),
+ * UI 层(HomeScreen / TaskDetailScreen)直接 Alert.alert(翻译结果)。
+ *
+ * 文案(任务 brief §A-6 明确 + 设计 task-detail-v1.0 §6):
+ *   - not_authenticated   → "请先登录"
+ *   - no_family          → "你还没加入家庭"
+ *   - task_not_found     → "任务不存在或已被删除"
+ *   - cancelled          → "任务已取消,无法打卡"
+ *   - rls_denied         → "没有打卡权限"
+ *   - unknown            → "打卡失败,请重试"
+ *
+ * 设计动机:
+ *   - 集中文案便于后续 i18n(react-i18next)— 所有失败 reason 都集中本模块常量 + 本函数
+ *   - 防御:UI 在翻译失败(reason 不在集合内)→ 返回默认 '打卡失败,请重试'(TS exhaustiveness 已保证)
+ */
+export function mapCheckInFailureReason(reason: CheckInFailureReason): string {
+  switch (reason) {
+    case 'not_authenticated':
+      return '请先登录';
+    case 'no_family':
+      return '你还没加入家庭';
+    case 'task_not_found':
+      return '任务不存在或已被删除';
+    case 'cancelled':
+      return '任务已取消,无法打卡';
+    case 'rls_denied':
+      return '没有打卡权限';
+    case 'unknown':
+      return '打卡失败,请重试';
   }
 }

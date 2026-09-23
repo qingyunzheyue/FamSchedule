@@ -102,6 +102,14 @@ export interface TaskListProps {
    * 可选 prop(不传则 TaskCard 不响应 long-press)。
    */
   onTaskLongPress?: (task: Task) => void;
+  /**
+   * **T-US005-1 新增**:打卡回调(传给 TaskCard.CheckInButton)— 由消费方
+   * (HomeScreen)调 CheckInService.checkin。响应后 UI 通过 Realtime 自然刷新。
+   * 可选 prop(不传则 TaskCard 不渲染 CheckInButton,fallback 到旧 badge 列)。
+   */
+  onTaskCheckIn?: (task: Task) => void | Promise<void>;
+  /** T-US005-1 新增:用于判定 CheckInButton 状态 — 由 HomeScreen 注入。 */
+  currentUserId?: string;
   onCreatePress: () => void;
 }
 
@@ -116,6 +124,9 @@ export interface TaskListProps {
  * useRouter,改为纯展示 + 触发回调。HomeScreen 在 handleTaskPress 里实现跳详情。
  *
  * T-US003-2:onTaskLongPress 透传给 TaskCard(可选 prop)— HomeScreen 实现具体删除行为。
+ *
+ * T-US005-1:onTaskCheckIn 透传给 TaskCard → CheckInButton;currentUserId 透传供
+ * CheckInButton 派生 me / spouse 身份。
  */
 export function TaskList({
   tasks,
@@ -126,6 +137,8 @@ export function TaskList({
   onRefresh,
   onTaskPress,
   onTaskLongPress,
+  onTaskCheckIn,
+  currentUserId = '',
   onCreatePress,
 }: TaskListProps): React.JSX.Element {
   // 每行 badge 预计算,避免 render 期间重复调用
@@ -151,6 +164,9 @@ export function TaskList({
           badge={item.badge}
           onPress={onTaskPress}
           onLongPress={onTaskLongPress}
+          onCheckIn={onTaskCheckIn}
+          currentUserId={currentUserId}
+          today={today}
         />
       )}
       ListEmptyComponent={

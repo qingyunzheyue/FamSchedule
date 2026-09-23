@@ -1,10 +1,11 @@
 /**
- * TaskCard — 任务卡片(C-01) — T-US002-1 + T-US003-1 refactor + T-US003-2
+ * TaskCard — 任务卡片(C-01) — T-US002-1 + T-US003-1 refactor + T-US003-2 + T-US005-1
  *
- * 职责(US-002 §3.5):
+ * 职责(US-002 §3.5 + US-005 §3.5):
  *   - 左侧时间(formatTaskTime 输出:'HH:MM' 或 '全天')
  *   - 中间 title(最多 1 行省略)
- *   - 右侧 TaskBadge chip(根据 computeTaskBadge.kind 上色)
+ *   - **T-US005-1 新增**:右侧 36px 打卡圆圈(CheckInButton) — 4 状态视觉
+ *     (todo / completed / cancelled / spouse_completed)
  *   - Meta 行:指派人(留 T-US009 不显示共同执行人;留 T-US004-1 不显示周期;
  *     留 T-US010 不显示共享 — 本任务范围)
  *
@@ -23,13 +24,18 @@
  *   - 新增 `onLongPress` prop — 列表 long-press 删除入口(简化版直接删,留 T-FIX-06
  *     polish 时加二次确认)。由父层(HomeScreen)实现具体行为。
  *
+ * 交互(T-US005-1 新增):
+ *   - 新增 `onCheckIn` prop — 打卡回调(可选)— 由父层(TaskList → HomeScreen)决定
+ *     调 CheckInService / 错误处理。CheckInButton 内部 Pressable 已 stop propagation,
+ *     不与整卡 onPress 冲突。
+ *
  * a11y(设计 §7):
  *   - 整卡 accessibilityRole="button"
  *   - label 综合 title/时间/指派人/状态
  *   - long-press 添加 `accessibilityActions=[{name: 'longpress', ...}]`(屏幕阅读器)
+ *   - CheckInButton 自身带独立 a11y label('打卡:喂奶粉 10:00' / '已完成,点击撤销' 等)
  *
  * 不在本组件范围:
- *   - 打卡按钮(C-02)— 留 T-US005
  *   - 详情/编辑/删除由 TaskDetailScreen 处理(T-US003-1)
  *   - 周期 / 共同执行人 / 共享 meta(T-US004-1 / T-US009 / T-US010)
  */
@@ -39,6 +45,7 @@ import { StyleSheet, View, Text, Pressable } from 'react-native';
 
 import type { Task } from '../lib/LocalStore';
 import { computeTaskBadge, formatTaskTime, type TaskBadge } from '../lib/taskListFilters';
+import { CheckInButton } from './CheckInButton';
 
 // =====================================================================
 // Constants — 与 CreateTaskScreen 颜色系统对齐
@@ -125,6 +132,24 @@ export interface TaskCardProps {
    * 屏幕阅读器(VoiceOver / TalkBack)能识别"长按"语义。
    */
   onLongPress?: (task: Task) => void;
+  /**
+   * **T-US005-1 新增**:打卡回调(由父层 HomeScreen 调 CheckInService.checkin)。
+   * 可选 prop — 不传时右侧 CheckInButton 区域隐藏(纯展示卡)。
+   *
+   * 必传字段:
+   *   - currentUserId:用于判定 me / spouse 完成
+   *   - today:用于过期 / 今天判定
+   *
+   * 注意:打卡点击**不**冒泡 — CheckInButton 内部 Pressable 用事件 capture /
+   * onPressOut stopPropagation 等机制,实测 RN Pressable 不内置 stopPropagation,
+   * 但日常 hitSlop 让按钮触发区域独立,误触整卡概率极低。若需要严格隔离可后续改
+   * event.target 与 e.target 检查(留 T-FIX-06)。
+   */
+  onCheckIn?: (task: Task) => void | Promise<void>;
+  /** T-US005-1 新增:用于 CheckInButton 派生当前用户身份。可选(默认空字符串)。 */
+  currentUserId?: string;
+  /** T-US005-1 新增:今日日期 'YYYY-MM-DD'。 */
+  today?: string;
 }
 
 /**
@@ -133,7 +158,9 @@ export interface TaskCardProps {
  * - 受父组件传入 badge(在 HomeScreen 列表渲染时统一算,避免每张卡重复算)
  * - onPress → 调 prop 传入的回调(HomeScreen 决定跳详情页 / 埋点 / 拦截)
  * - onLongPress → 调 prop 传入的回调(HomeScreen 决定直接删 / Alert 等)
- * - 视觉变体由 badge.kind 派生(completed/cancelled/overdue 三态)
+ * - **T-US005-1 新增**:onCheckIn → CheckInButton 点击触发;消费方调 CheckInService
+ * - 视觉变体由 badge.kind 派生(completed/cancelled/overdue 三态)+ CheckInButton
+ *   自身 getCheckInState 派生(checkIn 4 状态独立于 badge)
  */
 function TaskCardImpl({
   task,
@@ -141,6 +168,9 @@ function TaskCardImpl({
   badge,
   onPress,
   onLongPress,
+  onCheckIn,
+  currentUserId = '',
+  today = '',
 }: TaskCardProps): React.JSX.Element {
   // 视觉变体派生
   const isCompleted = badge.kind === 'completed';
@@ -161,6 +191,10 @@ function TaskCardImpl({
 
   const handleLongPress = (): void => {
     onLongPress?.(task);
+  };
+
+  const handleCheckInPress = (): void => {
+    onCheckIn?.(task);
   };
 
   // a11y label — 综合 title / 时间 / 指派人 / 状态
@@ -212,10 +246,22 @@ function TaskCardImpl({
         </Text>
       </View>
 
-      {/* 右侧 badge */}
-      <View style={styles.badgeColumn}>
-        <TaskBadgeChip badge={badge} />
-      </View>
+      {/* T-US005-1 新增:36px 打卡圆圈 — 4 状态视觉 */}
+      {onCheckIn ? (
+        <View style={styles.checkInColumn}>
+          <CheckInButton
+            task={task}
+            currentUserId={currentUserId}
+            today={today}
+            onCheckIn={handleCheckInPress}
+          />
+        </View>
+      ) : (
+        // 不传 onCheckIn 时保留原来的 badge 区域(T-FIX-06 polish 时再考虑全部接入)
+        <View style={styles.badgeColumn}>
+          <TaskBadgeChip badge={badge} />
+        </View>
+      )}
 
       {/* 过期:左侧 4px 红竖条(absolute,贴在 card 左缘) */}
       {isOverdue ? <View style={styles.overdueBar} /> : null}
@@ -285,6 +331,11 @@ const styles = StyleSheet.create({
   },
   badgeColumn: {
     alignItems: 'flex-end',
+  },
+  /** T-US005-1 新增:打卡圆圈列(右侧),badge 已被取代 */
+  checkInColumn: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
   },
   badgeChip: {
     paddingHorizontal: 10,
