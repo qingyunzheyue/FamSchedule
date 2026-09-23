@@ -1,5 +1,5 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成):
  *   1. 从 URL `?id=<taskId>` 读 taskId
@@ -36,6 +36,10 @@
  *   - ✅ **T-US005-1**:CheckInButton 替换原 CHECKIN_PLACEHOLDER / COMPLETED_PLACEHOLDER
  *   - ✅ **T-US005-2**:handleCheckIn 3 status 文案分支(spouse_completed / failed 弹 Alert,
  *                    checked_in noop);用 Alert.alert 而非 iOS Toast(跨平台一致,留 T-FIX-06 polish)
+ *   - ✅ **T-US005-4**:mount useSyncManager — 详情页用户停留时间长(看完整信息 / 编辑),
+ *                    配偶在另一台 device 打卡 / 编辑 / 删除同一 task 时,本屏需 Realtime 推送
+ *                    更新(否则要 back → re-enter 才看到最新态)。useSyncManager 内置
+ *                    AppState 切换处理(后台 → unsubscribe / 前台 → resubscribe)。
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
@@ -89,6 +93,7 @@ import {
 
 import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
+import { useSyncManager } from '../lib/SyncManager';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
 import {
   mapDeleteFailureReason,
@@ -170,6 +175,11 @@ export function TaskDetailScreen(): React.JSX.Element {
   const familyValue = useFamilyValue();
   const currentUserId = useCurrentUserId();
   const tasks = useTasks();
+
+  // T-US005-4:挂 SyncManager —— 配偶在另一台 device 改 / 删 / 打卡本 task 时,
+  // Realtime 推送 → LocalStore 更新 → useTasks() 重渲染 → 本屏视觉立即刷新
+  // (无需 back → re-enter)。AppState 后台/前台切换由 hook 内部处理。
+  useSyncManager(familyValue?.family.id ?? null);
 
   const task = useMemo(
     () => tasks.find((t) => t.id === taskId),

@@ -5,10 +5,12 @@ import { UserPlus, House, Crown } from 'phosphor-react-native';
 
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useFamilyValue } from '../../../src/contexts/FamilyContext';
+import { useTasks } from '../../../src/hooks/useTasks';
+import { useSyncManager } from '../../../src/lib/SyncManager';
 import type { FamilyMemberRow } from '../../../src/types/database';
 
 /**
- * T-US012-1 — Family dashboard(US-011 公开看板 + US-012 邀请码入口)。
+ * T-US012-1 + T-US005-4 — Family dashboard(US-011 公开看板 + US-012 邀请码入口 + Realtime 预占)。
  *
  * 升级内容:
  *   - 之前是 placeholder,只有硬编码的我 / 配偶两行 + "邀请配偶" 按钮
@@ -26,10 +28,25 @@ import type { FamilyMemberRow } from '../../../src/types/database';
  *   - US-012-2 邀请码倒计时
  *   - US-011 家庭公开看板完整版(连续打卡 / 周完成统计)
  *   - US-009 / US-010 共享任务列表
+ *
+ * T-US005-4 预占(Realtime 数据流提前挂载):
+ *   - 当前 placeholder 只展示成员卡 + 邀请入口,**不**消费 tasks
+ *   - mount useSyncManager —— 提前订阅 family Realtime channel + NetInfo 监听,
+ *     未来 US-011 看板(连续打卡 / 周完成统计)与 US-009 / US-010 共享任务列表接入
+ *     时,直接读 useTasks() 即可,无需再补订阅基础设施
+ *   - mount useTasks() —— 预占 data flow,返回值本任务暂不消费(消费场景
+ *   - 留待后续 US-011 / US-009 / US-010)
+ *   - **不**改 placeholder 渲染逻辑 — 严格 forward-only
  */
 export default function FamilyHome(): React.JSX.Element {
   const { user } = useAuth();
   const family = useFamilyValue();
+
+  // T-US005-4:Realtime 数据流预占 —— 挂 hook 让家庭 Tab 进入时即订阅 tasks 表,
+  // 后续 US-011 看板完成度统计直接读 useTasks() 即可。
+  // ⚠️ useTasks() 返回值本任务暂不消费,仅预占数据流(避免 placeholder 渲染变更)。
+  useTasks();
+  useSyncManager(family?.family.id ?? null);
 
   // FamilyContext 还没拿到 family 数据 → 兜底回 onboarding
   // (理论上 Gate 已拦住,但 useFamilyValue 的 null 分支仍要兜住)

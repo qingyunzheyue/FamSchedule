@@ -1,5 +1,5 @@
 /**
- * EditTaskScreen — 编辑任务 — T-US003-1 + T-US003-1 review fix
+ * EditTaskScreen — 编辑任务 — T-US003-1 + T-US003-1 review fix + T-US005-4
  *
  * 职责(US-003 编辑 — 一次性格式的任务编辑):
  *   1. 从 URL `?id=<taskId>` 读 taskId
@@ -27,6 +27,13 @@
  *   - Major #3-5:currentUserId 来源从 `useFamilyValue()?.family.created_by ?? ''`
  *     切换到 `useCurrentUserId()`,与其他 2 个 screen 同一来源(集中一处)
  *
+ * T-US005-4:
+ *   - mount useSyncManager —— 配偶在另一台 device 删除同一 task(T-US003-2 已支持),
+ *     Realtime DELETE 事件 → LocalStore 移除 task → EditTaskScreen "任务不存在" 自动
+ *     back(已有 useEffect 处理)
+ *   - 配偶修改 task 字段 → Realtime UPDATE → useTasks() 重渲染 → 提交时拿到 server
+ *     最新值,避免本地 cache 旧值与 server 冲突
+ *
  * a11y:
  *   - Header:取消 + 标题(header 不放保存按钮 — 走 TaskFormBody 内置按钮)
  *   - 表单字段 + 保存按钮:复用 TaskFormBody 已有的 a11y
@@ -50,6 +57,7 @@ import {
   useFamilyValue,
 } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
+import { useSyncManager } from '../lib/SyncManager';
 import {
   fromTask,
   toUpdateTaskInput,
@@ -101,6 +109,11 @@ export function EditTaskScreen(): React.JSX.Element {
   const familyValue = useFamilyValue();
   const currentUserId = useCurrentUserId();
   const tasks = useTasks();
+
+  // T-US005-4:挂 SyncManager —— 配偶在另一台 device 改 / 删本 task 时,Realtime 推送
+  // → LocalStore 更新 → useTasks() 重渲染。配偶删除时,本屏 useEffect 探测到
+  // task 消失 → Alert "任务不存在" + 自动 back(避免提交时 server 404)。
+  useSyncManager(familyValue?.family.id ?? null);
 
   const task = useMemo(
     () => tasks.find((t) => t.id === taskId),
