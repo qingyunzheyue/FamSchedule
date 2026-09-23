@@ -135,6 +135,9 @@ const tokens = createTokens({
     xxl: 24,
     '3xl': 32,
     '4xl': 48,
+    // Tamagui 2.x 要求: true = 默认 space,unspecific $true 引用 fallback
+    // T-FIX-BUNDLE-2:对齐 md=12
+    true: 12,
   },
   radius: {
     0: 0,
@@ -155,6 +158,9 @@ const tokens = createTokens({
     buttonSm: 36,
     buttonMd: 44,
     buttonLg: 52,
+    // Tamagui 2.x 要求: true = 默认 size,unspecific $true 引用 fallback
+    // T-FIX-BUNDLE-2:对齐 buttonMd=44(button 高度常用默认)
+    true: 44,
   },
   zIndex: {
     0: 0,
