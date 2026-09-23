@@ -1,5 +1,5 @@
 /**
- * TaskCard — 任务卡片(C-01) — T-US002-1 + T-US003-1 refactor
+ * TaskCard — 任务卡片(C-01) — T-US002-1 + T-US003-1 refactor + T-US003-2
  *
  * 职责(US-002 §3.5):
  *   - 左侧时间(formatTaskTime 输出:'HH:MM' 或 '全天')
@@ -19,9 +19,14 @@
  *     由父层(HomeScreen)实现 navigation。这样 TaskCard 保持纯展示组件,便于复用 /
  *     单测 / 替换跳转逻辑(埋点 / 拦截等)。
  *
+ * 交互(T-US003-2 修改):
+ *   - 新增 `onLongPress` prop — 列表 long-press 删除入口(简化版直接删,留 T-FIX-06
+ *     polish 时加二次确认)。由父层(HomeScreen)实现具体行为。
+ *
  * a11y(设计 §7):
  *   - 整卡 accessibilityRole="button"
  *   - label 综合 title/时间/指派人/状态
+ *   - long-press 添加 `accessibilityActions=[{name: 'longpress', ...}]`(屏幕阅读器)
  *
  * 不在本组件范围:
  *   - 打卡按钮(C-02)— 留 T-US005
@@ -30,7 +35,7 @@
  */
 
 import { memo } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, Pressable } from 'react-native';
 
 import type { Task } from '../lib/LocalStore';
 import { computeTaskBadge, formatTaskTime, type TaskBadge } from '../lib/taskListFilters';
@@ -111,6 +116,15 @@ export interface TaskCardProps {
    * TaskCard 内部不再直接调 useRouter — 保持纯展示。
    */
   onPress: (task: Task) => void;
+  /**
+   * T-US003-2 新增:长按回调(列表 long-press 删除入口)。
+   * 父层(HomeScreen)实现具体行为 — 简化版直接删除 + Alert 已删除。
+   * 可选 prop(不传则不响应 long-press)。
+   *
+   * a11y:同时注册 `accessibilityActions=[{name: 'longpress', onAccessibilityAction}]`,
+   * 屏幕阅读器(VoiceOver / TalkBack)能识别"长按"语义。
+   */
+  onLongPress?: (task: Task) => void;
 }
 
 /**
@@ -118,6 +132,7 @@ export interface TaskCardProps {
  *
  * - 受父组件传入 badge(在 HomeScreen 列表渲染时统一算,避免每张卡重复算)
  * - onPress → 调 prop 传入的回调(HomeScreen 决定跳详情页 / 埋点 / 拦截)
+ * - onLongPress → 调 prop 传入的回调(HomeScreen 决定直接删 / Alert 等)
  * - 视觉变体由 badge.kind 派生(completed/cancelled/overdue 三态)
  */
 function TaskCardImpl({
@@ -125,6 +140,7 @@ function TaskCardImpl({
   assigneeLabel,
   badge,
   onPress,
+  onLongPress,
 }: TaskCardProps): React.JSX.Element {
   // 视觉变体派生
   const isCompleted = badge.kind === 'completed';
@@ -143,6 +159,10 @@ function TaskCardImpl({
     onPress(task);
   };
 
+  const handleLongPress = (): void => {
+    onLongPress?.(task);
+  };
+
   // a11y label — 综合 title / 时间 / 指派人 / 状态
   const a11yLabel = [
     task.title,
@@ -151,13 +171,22 @@ function TaskCardImpl({
     badge.label,
   ].join(',');
 
+  // a11y actions — 长按语义(VoiceOver / TalkBack)。仅当 onLongPress 存在时挂上,
+  // 否则不做(避免给屏幕阅读器一个"无操作的选项")
+  const a11yActions = onLongPress
+    ? [{ name: 'longpress', label: '长按删除任务', onAccessibilityAction: handleLongPress }]
+    : undefined;
+
   return (
-    <View
+    <Pressable
       style={[styles.card, { opacity: cardOpacity, backgroundColor: cardBg }]}
-      onTouchEnd={handlePress}
+      onPress={handlePress}
+      onLongPress={onLongPress ? handleLongPress : undefined}
+      delayLongPress={500}
       accessible
       accessibilityRole="button"
       accessibilityLabel={a11yLabel}
+      accessibilityActions={a11yActions}
       testID={`task-card-${task.id}`}
     >
       {/* 左侧时间 */}
@@ -190,7 +219,7 @@ function TaskCardImpl({
 
       {/* 过期:左侧 4px 红竖条(absolute,贴在 card 左缘) */}
       {isOverdue ? <View style={styles.overdueBar} /> : null}
-    </View>
+    </Pressable>
   );
 }
 

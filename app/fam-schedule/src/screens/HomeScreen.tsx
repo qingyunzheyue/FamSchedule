@@ -1,5 +1,5 @@
 /**
- * HomeScreen — 任务列表主页 — T-US002-1
+ * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2
  *
  * 职责(US-002 故事 1/3 — 端到端任务可视化):
  *   1. mount 时通过 useSyncManager(familyId) 自动 subscribe + Realtime + pullSince
@@ -8,6 +8,7 @@
  *   4. filterTasks 筛选 + 排序(today/week/all)
  *   5. SegmentedTab 切换视图 + TaskList 渲染 TaskCard
  *   6. 下拉刷新 → pullSince,失败弹 Alert
+ *   7. **T-US003-2**:列表 long-press 删除入口(简化版直接删,留 T-FIX-06 polish)
  *
  * 设计依据:
  *   - home-v1.0.md §3 布局 + §6 文案 + §7 a11y
@@ -20,6 +21,8 @@
  *   - **打卡 button**:无(留 T-US005)
  *   - **Skeleton / OfflineBanner**:无(留 Wave 3)
  *   - **TaskCard 点击**:跳 task/[id] 占位 wrapper(无副作用,等 T-US003 接入)
+ *   - **T-US003-2 列表 long-press 删除**:不走二次确认,直接删除 + Alert 已删除
+ *     (留 T-FIX-06 polish 时加二次确认 — 与详情页删除二次确认差异化)
  *
  * URL 同步:
  *   - view 参数是 router state(URL `?view=today`)。useSearchParams 读 → 渲染;
@@ -47,8 +50,10 @@ import { useFamilyValue } from '../contexts/FamilyContext';
 import { pullSince, useSyncManager, type PullStatus } from '../lib/SyncManager';
 import { getLastSyncAt } from '../lib/LocalStore';
 import { filterTasks, type ViewMode } from '../lib/taskListFilters';
+import { mapDeleteFailureReason } from '../lib/createTaskForm';
 import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
+import { TaskService } from '../services/TaskService';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -67,6 +72,16 @@ const ALERT_SYNC_TITLE = '同步未完成';
 const ALERT_SYNC_MESSAGE = '部分数据未拉到,稍后会自动重试';
 const ALERT_NETWORK_TITLE = '网络异常';
 const ALERT_NETWORK_MESSAGE = '请检查网络连接后下拉刷新';
+
+/** T-US003-2 列表 long-press 删除文案 */
+const LONGPRESS_DELETED_TITLE = '已删除';
+const LONGPRESS_DELETED_MESSAGE_PREFIX = '任务"';
+const LONGPRESS_DELETED_MESSAGE_SUFFIX = '"已删除';
+const LONGPRESS_DELETED_OK_LABEL = '好';
+const LONGPRESS_TEMPLATE_BLOCKED_TITLE = '模板任务暂不支持删除';
+const LONGPRESS_TEMPLATE_BLOCKED_MESSAGE = '请进详情页操作';
+const LONGPRESS_DELETE_FAILED_TITLE = '删除失败';
+const LONGPRESS_DELETE_FAILED_OK_LABEL = '好';
 
 const VIEW_MODES: ReadonlyArray<ViewMode> = ['today', 'week', 'all'];
 
@@ -196,6 +211,41 @@ export function HomeScreen(): React.JSX.Element {
     [router],
   );
 
+  // ---- 任务长按 — T-US003-2:列表 long-press 直接删除(简化版) ----
+  //
+  // 与详情页删除(⋮ → 二次确认 → DELETE)的差异化:
+  //   - 详情页删除走 RN Alert 二次确认(⋮ 是显式操作,需要慎重)
+  //   - 列表 long-press **不**走二次确认(简化 UX),直接 DELETE + Alert 已删除
+  //   - T-FIX-06 polish 时再加二次确认
+  //
+  // 简化决策(本任务严格 scope):
+  //   - 仅一次性任务(template_id === null)走 DELETE
+  //   - 模板任务 → Alert "模板任务暂不支持删除,请进详情页操作"
+  //   - 失败 → Alert "删除失败" + mapDeleteFailureReason 翻译
+  const handleTaskLongPress = useCallback(async (task: Task): Promise<void> => {
+    // 模板任务分支:占位,留 T-US004-1 后做整系列级联
+    if (task.template_id !== null) {
+      Alert.alert(LONGPRESS_TEMPLATE_BLOCKED_TITLE, LONGPRESS_TEMPLATE_BLOCKED_MESSAGE);
+      return;
+    }
+
+    const result = await TaskService.deleteTask(task.id);
+    if (result.status === 'deleted') {
+      // 列表走 useTasks() 订阅,SyncManager.realtime 会自然刷新,无需手动 setTasks
+      Alert.alert(
+        LONGPRESS_DELETED_TITLE,
+        `${LONGPRESS_DELETED_MESSAGE_PREFIX}${task.title}${LONGPRESS_DELETED_MESSAGE_SUFFIX}`,
+        [{ text: LONGPRESS_DELETED_OK_LABEL, style: 'default' }],
+      );
+    } else {
+      Alert.alert(
+        LONGPRESS_DELETE_FAILED_TITLE,
+        mapDeleteFailureReason(result.reason),
+        [{ text: LONGPRESS_DELETE_FAILED_OK_LABEL, style: 'default' }],
+      );
+    }
+  }, []);
+
   // ---- 下拉刷新 ----
 
   const [refreshing, setRefreshing] = useState(false);
@@ -274,6 +324,7 @@ export function HomeScreen(): React.JSX.Element {
         refreshing={refreshing}
         onRefresh={onRefresh}
         onTaskPress={handleTaskPress}
+        onTaskLongPress={handleTaskLongPress}
         onCreatePress={handleCreatePress}
       />
     </YStack>

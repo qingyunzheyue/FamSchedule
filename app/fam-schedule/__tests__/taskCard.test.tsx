@@ -1,5 +1,5 @@
 /**
- * TaskCard 单元测试 — T-US003-1
+ * TaskCard 单元测试 — T-US003-1 + T-US003-2
  *
  * 覆盖范围(任务 brief §D):
  *   1. TaskCard 是函数组件 + memo 包过
@@ -7,6 +7,8 @@
  *   3. TaskCardProps 接口契约
  *   4. 默认 props 渲染不抛错(同 PhosphorTabIcon 模式)
  *   5. onPress 触发时调用 prop 传入的回调
+ *   6. **T-US003-2 新增**:onLongPress 是可选 prop,signature = (task: Task) => void
+ *      (不传时 TaskCard 仍正常工作;传给 TaskList 后再传给 TaskCard)
  *
  * 严格 scope:
  *   - 只测 TaskCard 组件契约(类型 + 默认值 + 回调),不渲染真实树
@@ -167,5 +169,30 @@ describe('TaskCard prop derivation', () => {
       const props: TaskCardProps = { ...BASE_PROPS, badge };
       expect(props.badge.kind).toBe(kind);
     });
+  });
+});
+
+// =====================================================================
+// T-US003-2 新增:onLongPress 可选 prop
+// =====================================================================
+
+describe('TaskCard (T-US003-2: onLongPress callback, optional prop)', () => {
+  it('accepts onLongPress prop of shape (task: Task) => void', () => {
+    const onLongPress: (task: Task) => void = jest.fn();
+    const props: TaskCardProps = { ...BASE_PROPS, onLongPress };
+    expect(typeof props.onLongPress).toBe('function');
+  });
+
+  it('onLongPress is optional — TaskCardProps works without it (no-op for long-press)', () => {
+    // 不传 onLongPress → props 仍满足 TaskCardProps(可选字段)
+    const propsWithoutLongPress: TaskCardProps = { ...BASE_PROPS };
+    expect((propsWithoutLongPress as unknown as { onLongPress?: unknown }).onLongPress).toBeUndefined();
+  });
+
+  it('onLongPress is independent from onPress — separate callbacks', () => {
+    const onPress = jest.fn();
+    const onLongPress = jest.fn();
+    const cardProps: TaskCardProps = { ...BASE_PROPS, onPress, onLongPress };
+    expect(cardProps.onPress).not.toBe(cardProps.onLongPress);
   });
 });

@@ -32,7 +32,11 @@
  *     再单独建 EditTaskFormState
  */
 
-import type { CreateTaskInput, UpdateTaskInput } from '../services/TaskService';
+import type {
+  CreateTaskInput,
+  DeleteTaskFailureReason,
+  UpdateTaskInput,
+} from '../services/TaskService';
 import type { FamilyMemberRow, TaskRow } from '../types/database';
 
 // =====================================================================
@@ -545,4 +549,46 @@ export function toUpdateTaskInput(
     description,
     isSharedView,
   };
+}
+
+// =====================================================================
+// 9. Delete 失败 reason 翻译 — T-US003-2
+// =====================================================================
+
+/**
+ * 把 TaskService.deleteTask 的失败 reason 翻译成 UI 文案。
+ *
+ * 与 EditTaskScreen.mapUpdateFailureReason 同模式 — 失败 reason 集中映射到中文文案,
+ * UI 层(HomeScreen / TaskDetailScreen)直接调 showAlert(翻译结果)。
+ *
+ * 文案依据:任务 brief §B + 设计 task-detail-v1.0 §6:
+ *   - not_authenticated      → "请先登录"
+ *   - no_family              → "你还没加入家庭"
+ *   - task_not_found         → "任务不存在或已被删除"
+ *   - not_owner              → "只有创建者可以删除任务"
+ *   - template_not_supported → "模板任务删除功能开发中,请到家庭 Tab 操作"
+ *   - rls_denied             → "没有删除权限"
+ *   - unknown                → "删除失败,请重试"
+ *
+ * 设计动机:
+ *   - 集中文案便于后续 i18n(react-i18next)— 所有中文都集中本模块常量 + 本函数
+ *   - 防御:UI 在翻译失败(reason 不在集合内)→ 返回默认 '删除失败,请重试'
+ */
+export function mapDeleteFailureReason(reason: DeleteTaskFailureReason): string {
+  switch (reason) {
+    case 'not_authenticated':
+      return '请先登录';
+    case 'no_family':
+      return '你还没加入家庭';
+    case 'task_not_found':
+      return '任务不存在或已被删除';
+    case 'not_owner':
+      return '只有创建者可以删除任务';
+    case 'template_not_supported':
+      return '模板任务删除功能开发中,请到家庭 Tab 操作';
+    case 'rls_denied':
+      return '没有删除权限';
+    case 'unknown':
+      return '删除失败,请重试';
+  }
 }

@@ -1,5 +1,5 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务):
  *   1. 从 URL `?id=<taskId>` 读 taskId
@@ -11,25 +11,32 @@
  *      - 指派人
  *      - **省略**:共同执行人 / 共享设置 / 周期(留 T-US009 / T-US010 / T-US004-1)
  *      - 打卡历史(占位 — 留 T-US005)
- *   4. ⋮ 菜单(任务 brief §A / §C.2):
+ *   4. ⋮ 菜单(任务 brief §A / §C.2 + T-US003-2):
  *      - 所有人可见:`复制为新任务` → Alert "即将推出"(留后续)
  *      - 创建者可见:`编辑` → router.push('/(main)/(home)/task-edit?id=...')
- *      - 创建者可见:`删除` → Alert "删除功能等 T-US003-2"(占位)
+ *      - **创建者可见:`删除` → ConfirmDialog → TaskService.deleteTask**(T-US003-2)
  *
  * 设计依据:
  *   - 任务 detail-v1.0.md §3.1 / §3.4 / §6 文案 / §7 a11y
- *   - 任务 brief §C.2:简化版 — 留 T-US005 / T-US003-2 / T-US009 / T-US010 / T-US014
+ *   - 任务 brief §C.2 + T-US003-2 brief §C
  *
  * 简化决策(明确记录 — dev self-acknowledge scope):
  *   - ❌ 不做打卡 button(留 T-US005)— 显示静态 placeholder "✓ 打卡(暂未启用)"
  *   - ❌ 不做撤销 button(留 T-US005)
  *   - ❌ 不做过期 banner(留 T-US014)
- *   - ❌ 不做确认 Dialog(留 T-US003-2)
- *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" / "删除"占位 Alert
+ *   - ✅ T-US003-2:删除走 RN Alert 二次确认(短期)→ 后续 polish 换 Tamagui Dialog
+ *   - ❌ 模板任务删除(留 T-US004-1)— Alert "模板任务暂不支持删除"
+ *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" 占位 Alert
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
  *     切换到 `useCurrentUserId()`(与其他 2 个 screen 同一来源,集中一处)
+ *
+ * T-US003-2 行为:
+ *   - **详情页删除**: 二次确认(更慎重,因 ⋮ 菜单是显式操作)
+ *     - 模板任务 → Alert "模板任务暂不支持删除"(占位,留 T-US004-1)
+ *     - 一次性任务 → ConfirmDialog → TaskService.deleteTask → Alert "已删除" + router.back
+ *     - 失败 → Alert "删除失败" + mapDeleteFailureReason 翻译
  *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
@@ -64,6 +71,9 @@ import {
 import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
+import { mapDeleteFailureReason } from '../lib/createTaskForm';
+import { TaskService } from '../services/TaskService';
+import { showConfirmDialog } from '../components/ConfirmDialog';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -78,7 +88,18 @@ const MENU_EDIT = '编辑';
 const MENU_DELETE = '删除';
 
 const COPY_AS_NEW_PLACEHOLDER = '复制为新任务即将推出';
-const DELETE_PLACEHOLDER = '删除功能等 T-US003-2 接入';
+
+/** T-US003-2 删除文案 — 对齐 task-detail-v1.0.md §6 */
+const DELETE_DIALOG_TITLE = '删除这个任务?';
+const DELETE_DIALOG_MESSAGE_PREFIX = '任务"';
+const DELETE_DIALOG_MESSAGE_SUFFIX = '"将被删除,无法恢复。';
+const DELETE_DIALOG_CONFIRM_LABEL = '删除';
+const DELETE_DIALOG_CANCEL_LABEL = '取消';
+const DELETE_DELETED_TITLE = '已删除';
+const DELETE_DELETED_OK_LABEL = '好';
+const DELETE_FAILED_TITLE = '删除失败';
+const TEMPLATE_DELETE_BLOCKED_TITLE = '模板任务暂不支持删除';
+const TEMPLATE_DELETE_BLOCKED_MESSAGE = '请先在家庭 Tab 解除模板关联';
 
 const SECTION_DESCRIPTION_LABEL = '备注';
 const SECTION_ASSIGNEE_LABEL = '指派人';
@@ -185,9 +206,45 @@ export function TaskDetailScreen(): React.JSX.Element {
     Alert.alert('即将推出', COPY_AS_NEW_PLACEHOLDER);
   }, []);
 
+  /**
+   * 删除当前 task(T-US003-2):
+   *   - 模板任务 → Alert "模板任务暂不支持删除"(占位)
+   *   - 一次性任务 → ConfirmDialog 二次确认 → TaskService.deleteTask
+   *     - 成功 → Alert "已删除" + router.back()
+   *     - 失败 → Alert "删除失败" + mapDeleteFailureReason 翻译
+   */
   const handleDelete = useCallback((): void => {
-    Alert.alert('即将推出', DELETE_PLACEHOLDER);
-  }, []);
+    if (!task) return;
+
+    // 模板任务分支:不调 deleteTask(避免走 template_not_supported 失败路径),
+    // 直接提示用户(整系列级联留 T-US004-1)
+    if (task.template_id !== null) {
+      Alert.alert(TEMPLATE_DELETE_BLOCKED_TITLE, TEMPLATE_DELETE_BLOCKED_MESSAGE);
+      return;
+    }
+
+    // 一次性任务:RN Alert 二次确认
+    showConfirmDialog({
+      title: DELETE_DIALOG_TITLE,
+      message: `${DELETE_DIALOG_MESSAGE_PREFIX}${task.title}${DELETE_DIALOG_MESSAGE_SUFFIX}`,
+      confirmLabel: DELETE_DIALOG_CONFIRM_LABEL,
+      cancelLabel: DELETE_DIALOG_CANCEL_LABEL,
+      destructive: true,
+      onCancel: () => {
+        // 用户按"取消" — 静默关闭,无额外反馈
+      },
+      onConfirm: async () => {
+        const result = await TaskService.deleteTask(task.id);
+        if (result.status === 'deleted') {
+          Alert.alert(DELETE_DELETED_TITLE, undefined, [
+            { text: DELETE_DELETED_OK_LABEL, onPress: () => router.back() },
+          ]);
+        } else {
+          Alert.alert(DELETE_FAILED_TITLE, mapDeleteFailureReason(result.reason));
+        }
+      },
+    });
+  }, [task, router]);
 
   // -------------------------------------------------------------------------
   // Render:loading

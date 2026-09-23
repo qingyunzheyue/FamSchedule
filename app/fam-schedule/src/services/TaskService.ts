@@ -1,5 +1,5 @@
 /**
- * TaskService — task 业务逻辑层 — T-US001-1 + T-US003-1
+ * TaskService — task 业务逻辑层 — T-US001-1 + T-US003-1 + T-US003-2
  *
  * 职责(task 维度写操作 — 一次性任务;周期留 T-US004-1):
  *   1. createTask(input) — 直插 tasks 表(对应 db-v1.1.sql §3.4),RLS 守门
@@ -10,6 +10,10 @@
  *                          模板任务编辑本期不支持(留 T-US004-1 完成后做
  *                          模板级联);改前校验 ownership + completed/cancelled
  *                          状态。返回 discriminated union。
+ *   3. **deleteTask(taskId)** — T-US003-2:DELETE tasks 行;**仅一次性任务**
+ *                          (template_id IS NULL);删除前校验 ownership。
+ *                          完成 / 已取消任务**仍可删除**(让用户清错打卡)。
+ *                          返回 discriminated union。
  *
  * 设计依据:
  *   - ADR-003(周期任务预展开):一次性任务仍写 tasks 行,只是 template_id = NULL;
@@ -17,12 +21,12 @@
  *   - ADR-005 + db-v1.1.sql §5.4:tasks INSERT/UPDATE 走 PostgREST + RLS,无需 RPC
  *     (不同于 family_members / family_settings 那种"必须服务端推 family_id"
  *      的场景,tasks.family_id 是 client 已知值)。
- *   - 单一职责:本模块只管 task 写(create + update);列表 / 打卡 / 周期
+ *   - 单一职责:本模块只管 task 写(create + update + delete);列表 / 打卡 / 周期
  *     模板展开分别留给 SyncManager.pullSince、SyncManager.replayQueue、
  *     TaskTemplateService(后续任务)。
  *   - sync 路径:本期不做离线入队(走 direct INSERT/UPDATE);后续 T-FIX-04
- *     可让 createTask/updateTask 改为 SyncManager.enqueueAndApply。
- *     当前 RPC 失败直接返回 failed,UI 弹「保存失败,请重试」;离线场景
+ *     可让 createTask/updateTask/deleteTask 改为 SyncManager.enqueueAndApply。
+ *     当前 RPC 失败直接返回 failed,UI 弹「删除失败,请重试」;离线场景
  *     表现 = 失败(已知设计债,留 ticket)。
  *
  * 模块形态(对齐 FamilyService):
@@ -40,6 +44,12 @@
  *         reason ∈ 'no_family' | 'not_authenticated' | 'not_owner' |
  *                  'task_completed' | 'task_cancelled' |
  *                  'template_not_supported' | <server error message>
+ *   - **deleteTask** (T-US003-2):
+ *       { status: 'deleted'; taskId: string }  — 成功
+ *       { status: 'failed'; reason: DeleteTaskFailureReason }  — pre-check 失败
+ *         reason ∈ 'no_family' | 'not_authenticated' | 'task_not_found' |
+ *                  'not_owner' | 'template_not_supported' | 'rls_denied' |
+ *                  'unknown'
  *
  * ⚠️ supabase-js typing quirk:.from('tasks').insert(...) 的 SDK 类型推断在
  *    Database generic 下对 nullable + DEFAULT 字段 narrow 不到位,FamilyService.ts
@@ -134,6 +144,45 @@ export type UpdateTaskFailureReason =
 export type UpdateTaskResult =
   | { status: 'updated'; task: TaskRow }
   | { status: 'failed'; reason: UpdateTaskFailureReason | string };
+
+/**
+ * deleteTask 失败 reason 的封闭集合 — 服务端语义错误(非网络/非业务)。
+ *
+ * - 'no_family'                 : 当前 user 不在 family 里
+ * - 'not_authenticated'         : getUser 返回 null/error
+ * - 'task_not_found'            : taskId 在 tasks 表里查不到(防御性)
+ * - 'not_owner'                 : 当前 user 不是 task.created_by(防御)
+ * - 'template_not_supported'    : task.template_id 非空(模板任务),本期不支持删除
+ *                                 — 留 T-US004-1 完成后做整系列级联
+ * - 'rls_denied'                : DELETE 返回 error 且含 'rls' 或 'policy'
+ * - 'unknown'                   : DELETE 返回其它 error
+ *
+ * UI 翻译(createTaskForm.mapDeleteFailureReason):
+ *   - not_owner                                  → "只有创建者可以删除任务"
+ *   - task_not_found                             → "任务不存在或已被删除"
+ *   - template_not_supported                     → "模板任务删除功能开发中,请到家庭 Tab 操作"
+ *   - rls_denied                                 → "没有删除权限"
+ *   - 其它                                       → "删除失败,请重试"
+ *
+ * ⚠️ 设计决策:
+ *   - **不**检查 completed_at / cancelled — 删除可应用于任何状态(包括已完成),
+ *     让用户清错打卡后还能清掉。对比 updateTask 是"不能改已完成任务"的语义。
+ *   - 模板任务删除本期简化决策,返回 template_not_supported;后续 T-US004-1 做
+ *     整系列级联(模板级联 PATCH + 删未来实例)。
+ */
+export type DeleteTaskFailureReason =
+  | 'no_family'
+  | 'not_authenticated'
+  | 'task_not_found'
+  | 'not_owner'
+  | 'template_not_supported'
+  | 'rls_denied'
+  | 'unknown';
+
+/** `deleteTask` 的结构化返回。 */
+export type DeleteTaskResult =
+  | { status: 'deleted'; taskId: string }
+  | { status: 'failed'; reason: DeleteTaskFailureReason };
 
 // =====================================================================
 // 1. createTask
@@ -363,7 +412,117 @@ export async function updateTask(
 }
 
 // =====================================================================
-// 3. 测试 / 调试出口
+// 3. deleteTask — T-US003-2
+// =====================================================================
+
+/**
+ * 删除一个 task 行(一次性任务)。
+ *
+ * **仅一次性任务**(template_id IS NULL)支持;模板任务删除本期不实现
+ * (留 T-US004-1 完成后做模板级联),直接返回
+ * `failed{reason: 'template_not_supported'}`。
+ *
+ * ⚠️ 与 updateTask 的关键差异:
+ *   - **不**检查 completed_at(删除可应用于任何状态,包括已完成 — 让用户清错打卡
+ *     后还能清掉)
+ *   - **不**检查 cancelled(同上)
+ *   - 模板任务本期不支持删除(整系列级联需 T-US004-1)
+ *
+ * 流程:
+ *   1. **pre-check**:getMyFamily() 必须非 null
+ *      - null → failed{reason: 'no_family'}
+ *   2. 拿当前 user.id
+ *      - 失败 → failed{reason: 'not_authenticated'}
+ *   3. **校验任务存在 + ownership**:
+ *      `SELECT id, created_by, template_id FROM tasks WHERE id = ?`
+ *      - 查不到 → failed{reason: 'task_not_found'}
+ *      - created_by !== user.id → failed{reason: 'not_owner'}
+ *      - template_id 非 null → failed{reason: 'template_not_supported'}
+ *   4. **DELETE** tasks 表:`DELETE FROM tasks WHERE id = ?`
+ *      - 失败(error.message 含 'rls' 或 'policy')→ failed{reason: 'rls_denied'}
+ *      - 其它 error → failed{reason: 'unknown'}
+ *   5. 成功 → `{status: 'deleted', taskId}`
+ *
+ * 不抛错:UI 拿到结构化 status 决定 retry / showError。
+ *
+ * ⚠️ sync 路径:本任务不接入 SyncManager.enqueueAndApply — 离线场景下
+ *    deleteTask 直接走 RPC,失败抛 failed;留 T-FIX-04。
+ *
+ * ⚠️ NotificationScheduler.cancel / 周期级联删除:本任务不接入。
+ *    - cancel 留 T-US007
+ *    - 模板级联删除留 T-US004-1
+ */
+export async function deleteTask(taskId: string): Promise<DeleteTaskResult> {
+  // 1. Pre-check:必须在 family 里
+  const family = await getMyFamily();
+  if (!family) {
+    // eslint-disable-next-line no-console
+    console.warn('[TaskService] deleteTask called but user has no family');
+    return { status: 'failed', reason: 'no_family' };
+  }
+
+  // 2. 拿当前 user.id
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData.user) {
+    // eslint-disable-next-line no-console
+    console.warn('[TaskService] deleteTask: getUser failed:', userErr?.message);
+    return { status: 'failed', reason: 'not_authenticated' };
+  }
+  const userId = userData.user.id;
+
+  // 3. 校验任务存在 + ownership(不检查 completed_at / cancelled — 删除可应用于任何状态)
+  const { data: existing, error: fetchErr } = await supabase
+    .from('tasks')
+    .select('id, created_by, template_id, cancelled, completed_at')
+    .eq('id', taskId)
+    .maybeSingle<Pick<
+      TaskRow,
+      'id' | 'created_by' | 'template_id' | 'cancelled' | 'completed_at'
+    >>();
+
+  if (fetchErr) {
+    // eslint-disable-next-line no-console
+    console.warn('[TaskService] deleteTask: fetch existing error:', fetchErr.message);
+    return { status: 'failed', reason: 'unknown' };
+  }
+  if (!existing) {
+    return { status: 'failed', reason: 'task_not_found' };
+  }
+  if (existing.created_by !== userId) {
+    // eslint-disable-next-line no-console
+    console.warn('[TaskService] deleteTask: not owner (created_by != user.id)');
+    return { status: 'failed', reason: 'not_owner' };
+  }
+  if (existing.template_id !== null) {
+    // 模板任务 → 本期不支持(整系列级联需 T-US004-1)
+    return { status: 'failed', reason: 'template_not_supported' };
+  }
+
+  // 4. DELETE tasks 表
+  const { error: deleteError } = await supabase
+    .from('tasks')
+    .delete()
+    .eq('id', taskId) as never as { error: { message: string; name?: string } | null };
+
+  if (deleteError) {
+    // eslint-disable-next-line no-console
+    console.warn('[TaskService] deleteTask: DELETE error:', deleteError.message);
+    // RLS / Policy 错误特征字符串 — 走 'rls_denied' 分支
+    if (
+      deleteError.message.includes('rls') ||
+      deleteError.message.includes('policy') ||
+      deleteError.message.includes('row-level security')
+    ) {
+      return { status: 'failed', reason: 'rls_denied' };
+    }
+    return { status: 'failed', reason: 'unknown' };
+  }
+
+  return { status: 'deleted', taskId };
+}
+
+// =====================================================================
+// 4. 测试 / 调试出口
 // =====================================================================
 
 /**
@@ -378,7 +537,7 @@ export function _resetForTests(): void {
 }
 
 // =====================================================================
-// 4. TaskService namespace(UI 层 sugar 入口)
+// 5. TaskService namespace(UI 层 sugar 入口)
 // =====================================================================
 
 /**
@@ -390,4 +549,5 @@ export function _resetForTests(): void {
 export const TaskService = {
   createTask,
   updateTask,
+  deleteTask,
 };

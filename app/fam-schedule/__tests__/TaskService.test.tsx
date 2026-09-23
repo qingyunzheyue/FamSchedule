@@ -44,6 +44,7 @@ function mockMakeQueryBuilder(): {
   single: jest.Mock;
   insert: jest.Mock;
   update: jest.Mock;
+  delete: jest.Mock;
   then: jest.Mock;
 } {
   const builder: {
@@ -53,6 +54,7 @@ function mockMakeQueryBuilder(): {
     single: jest.Mock;
     insert: jest.Mock;
     update: jest.Mock;
+    delete: jest.Mock;
     then: jest.Mock;
   } = {
     select: jest.fn(),
@@ -61,6 +63,7 @@ function mockMakeQueryBuilder(): {
     single: jest.fn(),
     insert: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
     then: jest.fn(),
   };
   builder.select.mockReturnValue(builder);
@@ -69,6 +72,7 @@ function mockMakeQueryBuilder(): {
   builder.single.mockResolvedValue({ data: null, error: null });
   builder.insert.mockReturnValue(builder);
   builder.update.mockReturnValue(builder);
+  builder.delete.mockReturnValue(builder);
   // 默认 await builder → {data: null, error: null}(thenable)
   builder.then.mockImplementation(
     (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
@@ -100,6 +104,7 @@ import {
   TaskService,
   createTask,
   updateTask,
+  deleteTask,
   _resetForTests,
 } from '../src/services/TaskService';
 
@@ -1172,6 +1177,312 @@ describe('TaskService.updateTask — failure paths', () => {
     expect(result.status).toBe('failed');
     if (result.status === 'failed') {
       expect(result.reason).toContain('no data');
+    }
+  });
+});
+
+// =====================================================================
+// deleteTask — T-US003-2
+// =====================================================================
+
+/**
+ * 给 deleteTask 构造链路:
+ *   1. pre-check getMyFamily(3 次 from 调用)
+ *   2. fetch existing task(单 .select().eq().maybeSingle())
+ *   3. DELETE tasks(.delete().eq())
+ *
+ * 行为参数:
+ *   - existingRow:mock 出来的 existing task row(default = creator + non-template + non-completed)
+ *   - deleteError:DELETE 返回的错误(null 表示 happy path)
+ */
+function setupDeleteHappyPath(opts?: {
+  existingRow?: Record<string, unknown> | null;
+  deleteError?: { message: string; name: string } | null;
+}): { deleteCallSpy: jest.Mock } {
+  const existingRow =
+    opts?.existingRow === undefined
+      ? {
+          id: TASK_ID,
+          created_by: CREATOR_ID,
+          template_id: null,
+          cancelled: false,
+          completed_at: null,
+        }
+      : opts.existingRow;
+  const deleteError = opts?.deleteError ?? null;
+
+  // pre-check (3 builders,同 setupHappyPath / setupUpdateHappyPath)
+  const b1 = mockMakeQueryBuilder();
+  b1.maybeSingle.mockResolvedValue({
+    data: { family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' },
+    error: null,
+  });
+  const b2 = mockMakeQueryBuilder();
+  b2.single.mockResolvedValue({
+    data: { id: FAMILY_ID, created_by: CREATOR_ID, created_at: '2026-09-01T00:00:00Z' },
+    error: null,
+  });
+  const b3 = mockMakeQueryBuilder();
+  b3.then.mockImplementation(
+    (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+      onFulfilled({
+        data: [{ family_id: FAMILY_ID, user_id: CREATOR_ID, joined_at: '2026-09-01T00:00:00Z' }],
+        error: null,
+      });
+      return Promise.resolve();
+    },
+  );
+
+  // fetch existing
+  const bFetch = mockMakeQueryBuilder();
+  bFetch.maybeSingle.mockResolvedValue({ data: existingRow, error: null });
+
+  // delete
+  const deleteCallSpy = jest.fn();
+  const bDelete = mockMakeQueryBuilder();
+  bDelete.delete.mockImplementation(() => {
+    deleteCallSpy();
+    return bDelete;
+  });
+  bDelete.eq.mockImplementation((col: string, val: string) => {
+    deleteCallSpy(col, val);
+    return bDelete;
+  });
+  // DELETE 链尾:thenable await 拿到 {data, error}
+  bDelete.then.mockImplementation(
+    (onFulfilled: (v: { data: unknown; error: unknown }) => void) => {
+      onFulfilled({ data: null, error: deleteError });
+      return Promise.resolve();
+    },
+  );
+
+  const queue = [b1, b2, b3, bFetch, bDelete];
+  let i = 0;
+  mockSupabaseFrom.mockImplementation(() => {
+    const b = queue[i] ?? mockMakeQueryBuilder();
+    i += 1;
+    return b;
+  });
+
+  return { deleteCallSpy };
+}
+
+describe('TaskService.deleteTask — happy path', () => {
+  it('returns deleted{taskId} on success', async () => {
+    setupDeleteHappyPath();
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('deleted');
+    if (result.status === 'deleted') {
+      expect(result.taskId).toBe(TASK_ID);
+    }
+  });
+
+  it('issues DELETE on tasks with eq(id, taskId) chain', async () => {
+    const { deleteCallSpy } = setupDeleteHappyPath();
+
+    await deleteTask(TASK_ID);
+
+    // .delete() + .eq('id', TASK_ID) 都被调过
+    expect(deleteCallSpy).toHaveBeenCalledWith();
+    expect(deleteCallSpy).toHaveBeenCalledWith('id', TASK_ID);
+  });
+
+  it('still deletes completed tasks (no completed_at guard — 让用户能清错打卡)', async () => {
+    setupDeleteHappyPath({
+      existingRow: {
+        id: TASK_ID,
+        created_by: CREATOR_ID,
+        template_id: null,
+        cancelled: false,
+        completed_at: '2026-09-22T10:05:00Z', // 已完成
+      },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('deleted');
+  });
+
+  it('still deletes cancelled tasks (no cancelled guard)', async () => {
+    setupDeleteHappyPath({
+      existingRow: {
+        id: TASK_ID,
+        created_by: CREATOR_ID,
+        template_id: null,
+        cancelled: true,
+        completed_at: null,
+      },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('deleted');
+  });
+});
+
+describe('TaskService.deleteTask — failure paths', () => {
+  it('returns failed{reason:"no_family"} when getMyFamily returns null', async () => {
+    const builder = mockMakeQueryBuilder();
+    builder.maybeSingle.mockResolvedValue({ data: null, error: null });
+    setMockFromBuilder('family_members', builder);
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('no_family');
+    }
+    // 不应触发 tasks 操作
+    const tasksCalls = mockSupabaseFrom.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'tasks',
+    );
+    expect(tasksCalls).toHaveLength(0);
+  });
+
+  it('returns failed{reason:"not_authenticated"} when second getUser returns null', async () => {
+    setupDeleteHappyPath();
+    // getMyFamily 内部已经用掉第一次 getUser;deleteTask 自己的 getUser 返回 null
+    mockAuthGetUser.mockResolvedValueOnce({
+      data: { user: { id: CREATOR_ID } },
+      error: null,
+    });
+    mockAuthGetUser.mockResolvedValueOnce({ data: { user: null }, error: null });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_authenticated');
+    }
+  });
+
+  it('returns failed{reason:"task_not_found"} when fetch existing returns null data', async () => {
+    setupDeleteHappyPath({ existingRow: null });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_not_found');
+    }
+  });
+
+  it('returns failed{reason:"not_owner"} when task.created_by !== current user', async () => {
+    setupDeleteHappyPath({
+      existingRow: {
+        id: TASK_ID,
+        created_by: SPOUSE_ID, // 不是当前 user
+        template_id: null,
+        cancelled: false,
+        completed_at: null,
+      },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('not_owner');
+    }
+  });
+
+  it('returns failed{reason:"template_not_supported"} when task.template_id is non-null', async () => {
+    setupDeleteHappyPath({
+      existingRow: {
+        id: TASK_ID,
+        created_by: CREATOR_ID,
+        template_id: 'template-uuid-3333-3333-3333-333333333333',
+        cancelled: false,
+        completed_at: null,
+      },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('template_not_supported');
+    }
+  });
+
+  it('returns failed{reason:"rls_denied"} when DELETE error contains "rls"', async () => {
+    setupDeleteHappyPath({
+      deleteError: { message: 'new row violates row-level security policy', name: 'PostgrestError' },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('rls_denied');
+    }
+  });
+
+  it('returns failed{reason:"rls_denied"} when DELETE error contains "policy"', async () => {
+    setupDeleteHappyPath({
+      deleteError: { message: 'policy violation: tasks_delete_owner', name: 'PostgrestError' },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('rls_denied');
+    }
+  });
+
+  it('returns failed{reason:"unknown"} when DELETE error does not match rls/policy', async () => {
+    setupDeleteHappyPath({
+      deleteError: { message: 'network timeout', name: 'PostgrestError' },
+    });
+
+    const result = await deleteTask(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('unknown');
+    }
+  });
+
+  it('does NOT call DELETE on tasks when ownership check fails (defensive: skip the destructive op)', async () => {
+    setupDeleteHappyPath({
+      existingRow: {
+        id: TASK_ID,
+        created_by: SPOUSE_ID, // not_owner
+        template_id: null,
+        cancelled: false,
+        completed_at: null,
+      },
+    });
+
+    await deleteTask(TASK_ID);
+
+    // ownership 校验失败 → 实现 early return,不应触发 .delete() 调用。
+    // 验证:只有 4 次 from() 调用(pre-check x3 + fetch existing x1),
+    // 第 5 次(DELETE 链)从未发生 — mockSupabaseFrom.mock.results 只含 4 个 builder。
+    expect(mockSupabaseFrom.mock.calls.filter((c) => c[0] === 'tasks')).toHaveLength(1);
+  });
+});
+
+// =====================================================================
+// TaskService namespace — deleteTask 同步
+// =====================================================================
+
+describe('TaskService namespace — deleteTask', () => {
+  it('TaskService.deleteTask is the same function reference as named export', () => {
+    expect(TaskService.deleteTask).toBe(deleteTask);
+  });
+
+  it('TaskService.deleteTask works through namespace with same signature', async () => {
+    setupDeleteHappyPath();
+
+    const result = await TaskService.deleteTask(TASK_ID);
+
+    expect(result.status).toBe('deleted');
+    if (result.status === 'deleted') {
+      expect(result.taskId).toBe(TASK_ID);
     }
   });
 });

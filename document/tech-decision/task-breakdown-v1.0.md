@@ -830,12 +830,12 @@ T-US007-1 (本地通知排程)
 - **Risk**: Med
 - **Priority**: P0
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done (2026-09-23) — T-US003-2 本期实现一次性任务删除;周期单实例 / 整系列级联留 T-US004-1 后做(template_not_supported reason 占位)
 - **Definition of Done**:
-  - 列表 long-press / 详情页"删除"按钮 → 弹二次确认
+  - 列表 long-press / 详情页"删除"按钮 → 弹二次确认(详情页)或直接删除(列表,简化版,T-FIX-06 polish)
   - 一次性任务:DELETE /tasks(id)
-  - 周期任务单实例:PATCH /tasks(id) {cancelled: true}
-  - 周期任务整系列:确认对话框多一个选项"删除整个系列"→ 调软删除模板 + 删未来实例
+  - 周期任务单实例:PATCH /tasks(id) {cancelled: true} — 留 T-US004-1
+  - 周期任务整系列:确认对话框多一个选项"删除整个系列"→ 调软删除模板 + 删未来实例 — 留 T-US004-1
 
 ---
 

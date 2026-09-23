@@ -1,5 +1,5 @@
 /**
- * TaskList — 任务列表容器 — T-US002-1 + T-US003-1
+ * TaskList — 任务列表容器 — T-US002-1 + T-US003-1 + T-US003-2
  *
  * 职责(US-002 §3.1 + §3.6):
  *   - FlatList 渲染 TaskCard 列表
@@ -18,6 +18,7 @@
  *   - 每行 computeTaskBadge(task, today)在父组件批量算 + 通过 prop 传入(本组件无 today 概念)
  *   - T-US003-1:onTaskPress 真正传给 TaskCard(之前是 dead prop)— TaskCard 不再内部
  *     useRouter,改为纯展示 + 触发回调;HomeScreen 实现具体 navigation
+ *   - T-US003-2:onTaskLongPress 透传给 TaskCard(可选 prop)— HomeScreen 实现具体删除行为
  *
  * 简化决策:
  *   - EmptyState 不做插画(☕)— brief 明确说"EmptyState: 文字 + 创建按钮(无插画)"
@@ -95,6 +96,12 @@ export interface TaskListProps {
   refreshing: boolean;
   onRefresh: () => void;
   onTaskPress: (task: Task) => void;
+  /**
+   * T-US003-2 新增:长按回调(列表 long-press 删除入口)。
+   * 父层(HomeScreen)实现具体行为 — 简化版直接删除 + Alert 已删除。
+   * 可选 prop(不传则 TaskCard 不响应 long-press)。
+   */
+  onTaskLongPress?: (task: Task) => void;
   onCreatePress: () => void;
 }
 
@@ -107,6 +114,8 @@ export interface TaskListProps {
  *
  * T-US003-1:onTaskPress 真正传给 TaskCard(之前是 dead prop)— TaskCard 不再内部
  * useRouter,改为纯展示 + 触发回调。HomeScreen 在 handleTaskPress 里实现跳详情。
+ *
+ * T-US003-2:onTaskLongPress 透传给 TaskCard(可选 prop)— HomeScreen 实现具体删除行为。
  */
 export function TaskList({
   tasks,
@@ -116,6 +125,7 @@ export function TaskList({
   refreshing,
   onRefresh,
   onTaskPress,
+  onTaskLongPress,
   onCreatePress,
 }: TaskListProps): React.JSX.Element {
   // 每行 badge 预计算,避免 render 期间重复调用
@@ -140,6 +150,7 @@ export function TaskList({
           assigneeLabel={item.assigneeLabel}
           badge={item.badge}
           onPress={onTaskPress}
+          onLongPress={onTaskLongPress}
         />
       )}
       ListEmptyComponent={
