@@ -1,5 +1,5 @@
 /**
- * CheckInService 单元测试 — T-US005-1
+ * CheckInService 单元测试 — T-US005-1 + T-US005-2
  *
  * 覆盖范围(任务 brief §D):
  *
@@ -19,6 +19,13 @@
  *   幂等:
  *     10. 已 completed_at → 立即 checked_in,**不**调 enqueueAndApply / **不**supabase.rpc
  *
+ *   **T-US005-2 新增** — 0 行处理 / 配偶先完成:
+ *     11. happy (我先完成):refetch 显示 completed_by === currentUserId → checked_in
+ *     12. spouse 先完成:refetch 显示 completed_by !== currentUserId → spouse_completed
+ *     13. refetch 失败 (network err):fallback 到乐观 checked_in(不弹错)
+ *     14. ADR-005 contract 在 spouse_completed path 也守住(supabase.rpc never called)
+ *     15. failure 路径下不调 refetch(节省 — pre-check 失败 / 幂等都早 return)
+ *
  * Mock 策略:
  *   - supabase 整个 mock(mockRpc / mockFrom / mockAuthGetUser)
  *   - FamilyService.getMyFamily mock(本 service 第一个 pre-check)
@@ -37,6 +44,9 @@
  *    不验证这两个内部 helper — SyncManager.test.ts 已经覆盖。
  *
  * ⚠️ 不依赖本地真 AsyncStorage;mock SyncManager/LocalStore 让测试极快 / 极稳。
+ *
+ * ⚠️ T-US005-2 sleep(500) 实打实跑(约 500ms / 测试)— 5 个新测试共 ~2.5s 额外耗时;
+ *    可接受。jest fake timer 会破坏 Promise.setTimeout 协同,放弃用 fake timer。
  */
 
 // ---- Mocks(必须在 import CheckInService 之前)----------------------------
@@ -335,6 +345,23 @@ describe('CheckInService.checkin — happy path', () => {
       expect(ts).toBeLessThanOrEqual(after + 100); // 100ms 余量
     }
   });
+
+  it('T-US005-2: performs refetch SELECT after enqueueAndApply (sleep + SELECT round-trip)', async () => {
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    setMockTaskSelect(task);
+
+    await checkin(TASK_ID);
+
+    // 验证 refetch SELECT 确实发生:supabase.from('tasks').select(...).maybeSingle() 至少 2 次
+    // (1 次 pre-check + 1 次 refetch)
+    expect(mockSupabaseFrom).toHaveBeenCalledWith('tasks');
+    // 调用次数:buildTaskRow 的 mockset + maybeSingle calls — 这里只校验 .from('tasks') 被调过多次
+    const fromCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromCalls.length).toBeGreaterThanOrEqual(2); // 至少 pre-check + refetch
+  });
 });
 
 // =====================================================================
@@ -530,5 +557,251 @@ describe('CheckInService.checkin — idempotency (already completed)', () => {
       expect(result.completedBy).toBe('');
     }
     expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================
+// T-US005-2: 0 行处理 / spouse_completed path
+// =====================================================================
+//
+// 设计动机:服务端 RPC `checkin_task` 在配偶已 first-finisher 时返回 0 行
+// (ADR-005 first-finisher wins),SyncManager.executeOnServer 对 0 行 result 静默
+// 通过(line 512-521)。CheckInService 在 enqueueAndApply 后 sleep(500) + 单 task
+// refetch 主动确认 RPC 结果,区分 checked_in(我先)vs spouse_completed(配偶先)。
+//
+// 关键约束:
+//   - ADR-005 contract 仍守住:CheckInService 不直接 supabase.rpc(走 SyncManager + SELECT refetch)
+//   - refetch 失败 → fallback 乐观 checked_in(Realtime channel 兜底)
+//   - 5 种 reason × task title 边界覆盖到 happy / spouse / refetch fail / ADR-005 / 不调 refetch
+// =====================================================================
+
+/**
+ * 配置 tasks SELECT 的 2 次响应(pre-check + T-US005-2 refetch)。
+ *
+ * 与 setMockTaskSelect(单响应 — 用于 pre-check 失败 / 幂等早 return 路径)
+ * 区别:本 helper 用 mockResolvedValueOnce 链式排队,确保 1 次调用 = 1 次响应。
+ *
+ * @param preCheck     — pre-check SELECT 返回的 row data(null = task_not_found)
+ * @param preCheckError — pre-check SELECT error message(不传 = 无 error)
+ * @param refetch      — T-US005-2 refetch SELECT 返回的 row data(null = 不存在)
+ * @param refetchError  — refetch SELECT error message(不传 = 无 error)
+ */
+function setMockTaskSelectWithRefetch(
+  preCheck: Partial<import('../src/types/database').TaskRow> | null,
+  refetch: Partial<import('../src/types/database').TaskRow> | null,
+  preCheckError?: string | null,
+  refetchError?: string | null,
+): void {
+  const builder = makeQueryBuilder();
+  // 1st: pre-check
+  builder.maybeSingle.mockResolvedValueOnce(
+    preCheckError
+      ? { data: null, error: { message: preCheckError } }
+      : {
+          data: preCheck
+            ? {
+                id: preCheck.id ?? TASK_ID,
+                cancelled: preCheck.cancelled ?? false,
+                completed_at: preCheck.completed_at ?? null,
+                completed_by: preCheck.completed_by ?? null,
+                is_makeup: preCheck.is_makeup ?? false,
+              }
+            : null,
+          error: null,
+        },
+  );
+  // 2nd: refetch(无 cancelled — refetch 不查 cancelled)
+  builder.maybeSingle.mockResolvedValueOnce(
+    refetchError
+      ? { data: null, error: { message: refetchError } }
+      : {
+          data: refetch
+            ? {
+                id: refetch.id ?? TASK_ID,
+                completed_at: refetch.completed_at ?? null,
+                completed_by: refetch.completed_by ?? null,
+                is_makeup: refetch.is_makeup ?? false,
+              }
+            : null,
+          error: null,
+        },
+  );
+  mockSupabaseFrom.mockImplementation((t: string) =>
+    t === 'tasks' ? builder : makeQueryBuilder(),
+  );
+}
+
+describe('CheckInService.checkin — T-US005-2 spouse_completed (0 行 RPC 返回处理)', () => {
+  it('returns checked_in when refetch shows completed_by === currentUserId (我先完成)', async () => {
+    // Happy refetch:配偶未先 → server RPC 写入 current user → refetch 看到我
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    const refetchCompletedAt = '2026-09-23T10:35:00Z';
+    setMockTaskSelectWithRefetch(
+      { id: TASK_ID, cancelled: false, completed_at: null, completed_by: null, is_makeup: false }, // pre-check: 未完成
+      { id: TASK_ID, completed_at: refetchCompletedAt, completed_by: ME_ID, is_makeup: false },     // refetch: 我完成
+    );
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('checked_in');
+    if (result.status === 'checked_in') {
+      expect(result.taskId).toBe(TASK_ID);
+      expect(result.completedAt).toBe(refetchCompletedAt);
+      expect(result.completedBy).toBe(ME_ID);
+      expect(result.isMakeup).toBe(false);
+    }
+    // ADR-005 contract 守住
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns spouse_completed when refetch shows completed_by !== currentUserId (配偶先完成)', async () => {
+    // 核心 T-US005-2 case:RPC 0 行 → refetch 显示 spouse 已 first-finisher
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    const spouseCompletedAt = '2026-09-23T10:30:00Z';
+    setMockTaskSelectWithRefetch(
+      { id: TASK_ID, cancelled: false, completed_at: null, completed_by: null, is_makeup: false }, // pre-check: 未完成
+      { id: TASK_ID, completed_at: spouseCompletedAt, completed_by: SPOUSE_ID, is_makeup: false }, // refetch: 配偶先完成
+    );
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('spouse_completed');
+    if (result.status === 'spouse_completed') {
+      expect(result.taskId).toBe(TASK_ID);
+      expect(result.completedAt).toBe(spouseCompletedAt);
+      expect(result.completedBy).toBe(SPOUSE_ID);
+    }
+    // spouse_completed path — ADR-005 contract 仍守住
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns checked_in (fallback) when refetch SELECT fails with network error', async () => {
+    // 网络断/超时 → refetch 失败 → fallback 乐观 checked_in(Realtime 兜底)
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    setMockTaskSelectWithRefetch(
+      { id: TASK_ID, cancelled: false, completed_at: null, completed_by: null, is_makeup: false },
+      null,
+      null,
+      'network timeout (PostgREST connection lost)',
+    );
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('checked_in');
+    if (result.status === 'checked_in') {
+      expect(result.taskId).toBe(TASK_ID);
+      // completedAt 来自 optimistic cache(由 mock 的 enqueueAndApply 写入)
+      expect(result.completedAt).not.toBeNull();
+      expect(typeof result.completedAt).toBe('string');
+    }
+    // ADR-005 contract 守住
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns checked_in (fallback) when refetch SELECT returns null row (race / cache miss)', async () => {
+    // 防御:refetch 返 null row(理论上不发生)→ fallback 乐观 success
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    setMockTaskSelectWithRefetch(
+      { id: TASK_ID, cancelled: false, completed_at: null, completed_by: null, is_makeup: false },
+      null, // refetch null row
+    );
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('checked_in');
+    if (result.status === 'checked_in') {
+      expect(result.taskId).toBe(TASK_ID);
+      expect(typeof result.completedAt).toBe('string');
+    }
+  });
+
+  it('preserves ADR-005 contract in spouse_completed path (supabase.rpc never called)', async () => {
+    // 关键 ADR-005 契约断言:spouse_completed path 也绝不直接调 supabase.rpc
+    // — CheckInService 通过 SyncManager.enqueueAndApply + SELECT refetch 完成所有 RPC/SELECT
+    const task = buildTaskRow({ id: TASK_ID });
+    mockTaskCache[TASK_ID] = task;
+    setMockTaskSelectWithRefetch(
+      { id: TASK_ID, cancelled: false, completed_at: null, completed_by: null, is_makeup: false },
+      { id: TASK_ID, completed_at: '2026-09-23T10:30:00Z', completed_by: SPOUSE_ID, is_makeup: false },
+    );
+
+    await checkin(TASK_ID);
+
+    // 整个测试期间 supabase.rpc 一次都不被 CheckInService 调用
+    expect(mockRpc).not.toHaveBeenCalled();
+    // SyncManager.enqueueAndApply 必须被调 1 次(走 mutation queue)
+    expect(mockEnqueueAndApply).toHaveBeenCalledTimes(1);
+    // 验证 .from('tasks') 至少 2 次(pre-check + refetch SELECT)
+    const fromTasksCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromTasksCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does NOT call refetch when pre-check fails (no_family path returns early)', async () => {
+    // 性能/简洁:pre-check 失败时不应再做 refetch(节省网络往返)
+    setMockFamily(null);
+    // pre-check 不需要 mock(因为 no_family 在 pre-check 之前返回)
+    // 但保险起见,设置一个永远不用的 SELECT mock
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('no_family');
+    }
+    // enqueueAndApply + refetch SELECT 都不会被调
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+    // .from('tasks') 0 次(no_family 早 return)
+    const fromTasksCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromTasksCalls.length).toBe(0);
+  });
+
+  it('does NOT call refetch when pre-check detects task already completed (idempotent early return)', async () => {
+    // 幂等:task 已 completed → 早 return,不走 enqueueAndApply 也不走 refetch
+    setMockFamily(FAMILY_ID);
+    setMockTaskSelect({
+      id: TASK_ID,
+      cancelled: false,
+      completed_at: '2026-09-23T10:05:00Z',
+      completed_by: SPOUSE_ID, // 配偶已先打卡
+    });
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('checked_in');
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+    // .from('tasks') 只 1 次(pre-check SELECT — 之后早 return)
+    const fromTasksCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromTasksCalls.length).toBe(1);
+  });
+
+  it('does NOT call refetch when pre-check fails for task_not_found', async () => {
+    setMockFamily(FAMILY_ID);
+    setMockTaskSelect(null); // pre-check: row 不存在 → task_not_found
+
+    const result = await checkin(TASK_ID);
+
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toBe('task_not_found');
+    }
+    expect(mockEnqueueAndApply).not.toHaveBeenCalled();
+    // .from('tasks') 只 1 次(pre-check)
+    const fromTasksCalls = mockSupabaseFrom.mock.calls.filter(
+      ([t]: [string]) => t === 'tasks',
+    );
+    expect(fromTasksCalls.length).toBe(1);
   });
 });

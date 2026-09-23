@@ -1,7 +1,8 @@
 /**
- * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1
+ * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1 + T-US005-2
  *
- * 职责(US-002 故事 1/3 — 端到端任务可视化 + US-005 故事 1/4 — 列表打卡):
+ * 职责(US-002 故事 1/3 — 端到端任务可视化 + US-005 故事 1/4 — 列表打卡 +
+ *       US-005 故事 2/4 — 配偶先完成 toast):
  *   1. mount 时通过 useSyncManager(familyId) 自动 subscribe + Realtime + pullSince
  *   2. 通过 useTasks() 订阅 SyncManager.tasksSnapshot,响应 setTasks / pullSince / realtime 变更
  *   3. URL `?view=today|week|all` 作为视图 source of truth,默认 today
@@ -11,10 +12,15 @@
  *   7. **T-US003-2**:列表 long-press 删除入口(简化版直接删,留 T-FIX-06 polish)
  *   8. **T-US005-1 新增**:打卡回调(handleTaskCheckIn)→ 调 CheckInService.checkin
  *      → 失败 Alert(翻译 mapCheckInFailureReason) / 成功 noop(乐观 UI 自然切换)
+ *   9. **T-US005-2 新增**:打卡回调 3 status 分支 —
+ *      - checked_in(我先完成):UI 乐观切到 completed 态,no toast
+ *      - spouse_completed(配偶先完成):Alert.alert("配偶已先一步完成", "由配偶于 HH:MM 完成")
+ *      - failed:Alert 翻译失败 reason
  *
  * 设计依据:
  *   - home-v1.0.md §3 布局 + §6 文案 + §7 a11y
  *   - ADR-005:SyncManager 是 server 镜像的 single source of truth,UI 不直接调 supabase
+ *   - 设计 task-detail-v1.0 §10:配偶先完成用 Toast(本任务用 Alert 跨平台一致,留 polish)
  *
  * 简化决策(本任务严格 scope):
  *   - **Header 简化版**:只渲染"任务列表"标题 + 右上角 + 按钮;不渲染大日期 + 时段问候
@@ -26,6 +32,8 @@
  *   - **T-US005-1 列表打卡**:走乐观 UI — 点击 → CheckInService → SyncManager
  *     enqueueAndApply → LocalStore 立即标 completed_at → useTasks() 自然刷新 → CheckInButton
  *     切到 completed 视觉态。失败的 case 弹 Alert,成功的 noop。
+ *   - **T-US005-2 spouse_completed 用 Alert 而非 iOS Toast**:跨平台一致(无 2 秒自动消失)
+ *     TODO 后续 T-FIX-06 polish 用 react-native-toast-message 提供原生 iOS Toast 体验
  *
  * URL 同步:
  *   - view 参数是 router state(URL `?view=today`)。useSearchParams 读 → 渲染;
@@ -41,6 +49,7 @@
  *   - 创建任务(走 router.push 到 task-create route,T-US001-1 已闭环)
  *   - 过期 banner / Skeleton / 共同执行人 / 周期 / 共享(T-US002-2+ 后续)
  *   - 打卡历史 / 撤销打卡 / 补卡(US-005 / US-006 后续任务)
+ *   - iOS Toast(留 T-FIX-06 polish)
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -54,7 +63,7 @@ import { useFamilyValue, useCurrentUserId } from '../contexts/FamilyContext';
 import { pullSince, useSyncManager, type PullStatus } from '../lib/SyncManager';
 import { getLastSyncAt } from '../lib/LocalStore';
 import { filterTasks, type ViewMode } from '../lib/taskListFilters';
-import { mapDeleteFailureReason, mapCheckInFailureReason } from '../lib/createTaskForm';
+import { mapDeleteFailureReason, mapCheckInFailureReason, mapCheckInResultToToast } from '../lib/createTaskForm';
 import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
 import { TaskService } from '../services/TaskService';
@@ -81,6 +90,9 @@ const ALERT_NETWORK_MESSAGE = '请检查网络连接后下拉刷新';
 /** T-US005-1 列表打卡失败标题 */
 const CHECKIN_FAILED_TITLE = '打卡失败';
 const CHECKIN_FAILED_OK_LABEL = '好';
+
+/** T-US005-2 列表打卡 — 配偶先完成提示按钮 label */
+const SPOUSE_COMPLETED_OK_LABEL = '好';
 
 /** T-US003-2 列表 long-press 删除文案 */
 const LONGPRESS_DELETED_TITLE = '已删除';
@@ -255,22 +267,29 @@ export function HomeScreen(): React.JSX.Element {
     }
   }, []);
 
-  // ---- 任务打卡 — T-US005-1 ----
+  // ---- 任务打卡 — T-US005-1 + T-US005-2 ----
   //
   // 列表 CheckInButton 点击触发。行为:
   //   - 调 CheckInService.checkin(taskId, false)— 走 SyncManager.enqueueAndApply
   //     乐观更新 + 入队 + 在线即触发 RPC(ADR-005 contract)
-  //   - 成功不显式提示 — useTasks() 通过 Realtime 自然更新 CheckInButton 视觉态
-  //     (cancelled / completed / spouse_completed / todo 4 状态)
-  //   - 失败 → Alert.alert(translated failure reason) + 单 OK 按钮
-  //
-  // 留后续:
-  //   - 配偶先完成的 toast 提示(T-US005-2)— 0 行 RPC 返回处理暂未接
-  //   - 5 分钟内撤销入口(T-US005-3)— CheckInButton completed 态点击目前 noop
+  //   - CheckInService.checkin 在 T-US005-2 后返回 3 种 status:
+  //     a) 'checked_in'        — 我先完成(成功)— UI 乐观切到 completed 态,
+  //                              跨组件一致地不弹 toast(简洁);Realtime 推送兜底
+  //     b) 'spouse_completed'  — 配偶先 done(0 行 RPC)— Alert "配偶已先一步完成"
+  //     c) 'failed'            — pre-check 失败 — Alert "打卡失败" + 翻译 reason
+  //   - 留后续:
+  //     - 5 分钟内撤销入口(T-US005-3)— CheckInButton completed 态点击目前 noop
+  //     - iOS Toast polish(react-native-toast-message)— 当前用 Alert.alert 跨平台一致
   const handleTaskCheckIn = useCallback(
     async (task: Task): Promise<void> => {
       const result = await CheckInService.checkin(task.id, false);
-      if (result.status === 'failed') {
+      // checked_in:乐观 UI 自然切换,不弹 toast(简洁)
+      if (result.status === 'spouse_completed') {
+        const msg = mapCheckInResultToToast(result, task.title);
+        Alert.alert(msg.title, msg.body, [
+          { text: SPOUSE_COMPLETED_OK_LABEL, style: 'default' },
+        ]);
+      } else if (result.status === 'failed') {
         Alert.alert(
           CHECKIN_FAILED_TITLE,
           mapCheckInFailureReason(result.reason),

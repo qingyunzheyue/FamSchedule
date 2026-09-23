@@ -37,7 +37,7 @@ import type {
   DeleteTaskFailureReason,
   UpdateTaskInput,
 } from '../services/TaskService';
-import type { CheckInFailureReason } from '../services/CheckInService';
+import type { CheckInFailureReason, CheckInResult } from '../services/CheckInService';
 import type { FamilyMemberRow, TaskRow } from '../types/database';
 
 // =====================================================================
@@ -630,5 +630,80 @@ export function mapCheckInFailureReason(reason: CheckInFailureReason): string {
       return '没有打卡权限';
     case 'unknown':
       return '打卡失败,请重试';
+  }
+}
+
+// =====================================================================
+// 10. T-US005-2: 把 CheckInResult 翻译成 toast 展示文案
+// =====================================================================
+
+/**
+ * Toast 文案的结构化结果(任务 brief §B.2 + 设计 task-detail-v1.0 §6)。
+ *
+ * - variant='success'          : 打卡成功(我先完成)— UI 可选弹 toast / 不弹
+ * - variant='spouse_completed' : 配偶已先完成 — UI **必须**弹 Alert 告知用户
+ * - variant='error'            : 打卡失败 — UI 弹 Alert(走 mapCheckInFailureReason)
+ *
+ * UI 用 Alert.alert(msg.title, msg.body, [{text: '好'}]) 即可跨平台一致(无 2 秒自动
+ * 消失,但 iOS / Android 行为统一)。
+ *
+ * TODO: 后续可优化为 iOS Toast(react-native-toast-message)— 留 T-FIX-06 polish。
+ */
+export interface CheckInToastMessage {
+  title: string;
+  body: string;
+  variant: 'success' | 'spouse_completed' | 'error';
+}
+
+/**
+ * 把 CheckInService.checkin 的结构化返回翻译成 UI 展示文案。
+ *
+ * 翻译表(任务 brief §B.2 + 设计 task-detail-v1.0 §6 文案):
+ *   - checked_in      → title="已打卡 ✨" / body="「<taskTitle>」已完成" / variant=success
+ *   - spouse_completed → title="配偶已先一步完成"
+ *                        body="「<taskTitle>」由配偶于 HH:MM 完成"(HH:MM 从 completedAt slice(11,16))
+ *                        variant=spouse_completed
+ *   - failed          → title="打卡失败"
+ *                        body=mapCheckInFailureReason(reason)
+ *                        variant=error
+ *
+ * 设计动机(与 mapDeleteFailureReason / mapCheckInFailureReason 同模式):
+ *   - 集中文案便于后续 i18n(react-i18next)— 所有 toast 文案集中本模块常量 + 本函数
+ *   - 防御:UI 在翻译失败(TS exhaustiveness 已保证)
+ *
+ * ⚠️ TS exhaustiveness:对 CheckInResult 的 3 种 status 全部 case 覆盖;Switch 完整 →
+ *    无需 default 分支。Jest 单测覆盖 3 status × taskTitle 边界 = 5 cases。
+ *
+ * @param result    — CheckInService.checkin 返回值
+ * @param taskTitle — 任务标题(用于 body 文案拼接)— 由 UI 注入
+ */
+export function mapCheckInResultToToast(
+  result: CheckInResult,
+  taskTitle: string,
+): CheckInToastMessage {
+  switch (result.status) {
+    case 'checked_in':
+      return {
+        title: '已打卡 ✨',
+        body: `「${taskTitle}」已完成`,
+        variant: 'success',
+      };
+    case 'spouse_completed': {
+      // ISO timestamp 'YYYY-MM-DDTHH:MM:SS.sssZ' → slice(11, 16) = 'HH:MM'
+      // 防御:若 completedAt 格式异常(理论不会发生),slice 返回空串 → 文案降级
+      const spouseTime = result.completedAt.slice(11, 16);
+      const timeLabel = spouseTime.length > 0 ? spouseTime : '刚刚';
+      return {
+        title: '配偶已先一步完成',
+        body: `「${taskTitle}」由配偶于 ${timeLabel} 完成`,
+        variant: 'spouse_completed',
+      };
+    }
+    case 'failed':
+      return {
+        title: '打卡失败',
+        body: mapCheckInFailureReason(result.reason),
+        variant: 'error',
+      };
   }
 }

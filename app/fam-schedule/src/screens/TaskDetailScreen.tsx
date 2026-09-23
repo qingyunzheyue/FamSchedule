@@ -1,7 +1,7 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2
  *
- * 职责(US-002 故事 2/3 — 端到端查看单个任务):
+ * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 渲染 task-detail-v1.0.md §3.1 布局的**简化版**:
@@ -17,10 +17,15 @@
  *      - **创建者可见:`删除` → ConfirmDialog → TaskService.deleteTask**(T-US003-2)
  *   5. **T-US005-1 新增**:CheckInButton 集成 → handleCheckIn → CheckInService.checkin →
  *      失败 Alert(翻译 mapCheckInFailureReason)/ 成功 noop(乐观 UI 自然切换)
+ *   6. **T-US005-2 新增**:handleCheckIn 3 status 分支 —
+ *      - checked_in(我先完成):no toast(乐观 UI 自动切到 completed 态)
+ *      - spouse_completed(配偶先完成):Alert "配偶已先一步完成",body "由配偶于 HH:MM 完成"
+ *      - failed:Alert "打卡失败" + 翻译 reason
  *
  * 设计依据:
  *   - 任务 detail-v1.0.md §3.1 / §3.4 / §6 文案 / §7 a11y
- *   - 任务 brief §C.2 + T-US003-2 brief §C + T-US005-1 brief §C.4
+ *   - 任务 brief §C.2 + T-US003-2 brief §C + T-US005-1 brief §C.4 + T-US005-2 brief
+ *   - 设计 task-detail-v1.0 §10:配偶先完成用 Toast(本任务用 Alert 跨平台一致,留 polish)
  *
  * 简化决策(明确记录 — dev self-acknowledge scope):
  *   - ❌ 不做撤销 button(留 T-US005-3)— CheckInButton 在 completed 态下点击 noop
@@ -29,6 +34,8 @@
  *   - ❌ 模板任务删除(留 T-US004-1)— Alert "模板任务暂不支持删除"
  *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" 占位 Alert
  *   - ✅ **T-US005-1**:CheckInButton 替换原 CHECKIN_PLACEHOLDER / COMPLETED_PLACEHOLDER
+ *   - ✅ **T-US005-2**:handleCheckIn 3 status 文案分支(spouse_completed / failed 弹 Alert,
+ *                    checked_in noop);用 Alert.alert 而非 iOS Toast(跨平台一致,留 T-FIX-06 polish)
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
@@ -41,6 +48,14 @@
  *     - 点击 todo → handleCheckIn → CheckInService.checkin → 失败 Alert / 成功 noop
  *   - **handleCheckIn**:统一调 CheckInService;失败弹 Alert(翻译文案);成功不显式提示
  *     (乐观 UI 通过 Realtime 自然切换 — SyncManager 已订阅 tasks 表)
+ *
+ * T-US005-2 行为:
+ *   - **CheckInService.checkin** 新增 'spouse_completed' 状态(RPC 0 行 → refetch 判定)
+ *   - **handleCheckIn 3 status 分支**:
+ *     - checked_in → noop
+ *     - spouse_completed → Alert "配偶已先一步完成" / "「<title>」由配偶于 HH:MM 完成"
+ *     - failed → Alert "打卡失败" + mapCheckInFailureReason
+ *   - ADR-005 contract 守住:CheckInService 不直接 supabase.rpc(走 SyncManager + SELECT refetch)
  *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
@@ -75,7 +90,7 @@ import {
 import { useCurrentUserId, useFamilyValue } from '../contexts/FamilyContext';
 import { useTasks } from '../hooks/useTasks';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
-import { mapDeleteFailureReason, mapCheckInFailureReason } from '../lib/createTaskForm';
+import { mapDeleteFailureReason, mapCheckInFailureReason, mapCheckInResultToToast } from '../lib/createTaskForm';
 import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
 import { showConfirmDialog } from '../components/ConfirmDialog';
@@ -114,6 +129,8 @@ const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';
 
 /** T-US005-1:打卡失败 Alert 标题 */
 const CHECKIN_FAILED_TITLE = '打卡失败';
+/** T-US005-2:配偶先完成 Alert / 失败 Alert 按钮 label */
+const CHECKIN_OK_LABEL = '好';
 
 const TASK_NOT_FOUND_TITLE = '任务不存在';
 const TASK_NOT_FOUND_MESSAGE = '这条任务可能已被删除,正在返回';
@@ -212,24 +229,34 @@ export function TaskDetailScreen(): React.JSX.Element {
   }, []);
 
   /**
-   * 打卡回调(T-US005-1)— 详情页 CheckInButton 点击触发。
+   * 打卡回调(T-US005-1 + T-US005-2)— 详情页 CheckInButton 点击触发。
    *
    * 行为:
    *   - 调 CheckInService.checkin(taskId, false)— 走 SyncManager.enqueueAndApply
    *     乐观更新 + 入队 + 在线即触发 RPC(ADR-005 contract)
-   *   - 成功不显式提示 — UI 通过 Realtime 自然切换到 completed 态(乐观 UI)
-   *   - 失败 → Alert.alert(translated failure reason)— 翻译走 mapCheckInFailureReason
+   *   - CheckInService.checkin 在 T-US005-2 后返回 3 种 status:
+   *     a) 'checked_in'        — 我先完成(成功)— UI 乐观切到 completed 态,no toast
+   *     b) 'spouse_completed'  — 配偶先 done(0 行 RPC)— Alert "配偶已先一步完成"
+   *     c) 'failed'            — pre-check 失败 — Alert "打卡失败" + 翻译 reason
+   *   - 文案翻译走 mapCheckInResultToToast(result, taskArg.title)
    *
    * 留后续:
-   *   - 配偶先完成的 toast 提示(T-US005-2)— 本任务 React 状态切换已 OK,但 Alert/toast
-   *     触发条件需要 0 行 RPC 返回处理,留 T-US005-2
    *   - 5 分钟内撤销入口(T-US005-3)— 本任务 completed 态点击 noop
+   *   - iOS Toast polish(T-FIX-06)— 当前 Alert.alert 跨平台一致(无 2 秒自动消失)
    */
   const handleCheckIn = useCallback(
     async (taskArg: Task): Promise<void> => {
       const result = await CheckInService.checkin(taskArg.id, false);
-      if (result.status === 'failed') {
-        Alert.alert(CHECKIN_FAILED_TITLE, mapCheckInFailureReason(result.reason));
+      // checked_in:乐观 UI 自然切换到 completed 视觉态,不弹 toast(简洁)
+      if (result.status === 'spouse_completed') {
+        const msg = mapCheckInResultToToast(result, taskArg.title);
+        Alert.alert(msg.title, msg.body, [{ text: CHECKIN_OK_LABEL, style: 'default' }]);
+      } else if (result.status === 'failed') {
+        Alert.alert(
+          CHECKIN_FAILED_TITLE,
+          mapCheckInFailureReason(result.reason),
+          [{ text: CHECKIN_OK_LABEL, style: 'default' }],
+        );
       }
       // 成功 noop:Realtime 自动合并 + UI 通过 getCheckInState 自然切换
     },

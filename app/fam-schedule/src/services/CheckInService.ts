@@ -1,5 +1,5 @@
 /**
- * CheckInService — 一键打卡 service — T-US005-1
+ * CheckInService — 一键打卡 service — T-US005-1 + T-US005-2
  *
  * 职责(task 维度打卡写操作 — 一次性 + 周期任务统一入口):
  *   1. checkin(taskId, isMakeup) → 调 RPC `checkin_task`(US-005 主线入口)
@@ -27,16 +27,25 @@
  *
  * Result 类型(discriminated union):
  *   checkin:
- *     { status: 'checked_in'; taskId; completedAt; completedBy; isMakeup }  — 成功
+ *     { status: 'checked_in'; taskId; completedAt; completedBy; isMakeup }  — 我先完成
+ *     { status: 'spouse_completed'; taskId; completedAt; completedBy }  — 配偶先 done(0 行 RPC)
  *     { status: 'failed'; reason: CheckInFailureReason }  — pre-check 失败 / 兜底失败
  *
  * ⚠️ 关键约束:本服务**不**直接调 supabase.rpc — 走 SyncManager.enqueueAndApply。
  *   这是 ADR-005 的契约(line 28-31):checkin / undo_checkin 走 RPC(原子 SQL)必须经
  *   SyncManager queue 走(才能离线时入队、网络恢复时 replay),不能旁路。
  *   任何"为了简单直接调 RPC"的诱惑都视为合约破坏。
+ *   T-US005-2 新增的 refetch 是 SELECT(读)操作,不破坏 contract。
  *
- * ⚠️ 不接 0 行处理 — RPC 0 行(first-finisher 已 done)由 Realtime 自然校正;
- *   本服务不主动 fetch 单 task。配偶先完成的 toast/alert 留 T-US005-2。
+ * ⚠️ spouse_completed 处理(T-US005-2):
+ *   - 服务端 RPC `checkin_task` 在配偶已先打卡时返回 0 行(first-finisher wins)
+ *   - SyncManager.executeOnServer 对 0 行 result 静默通过(line 512-521)
+ *   - 本服务 enqueueAndApply 后 sleep(500) + 单 task refetch 主动判定:
+ *     - refetch 失败 → fallback 乐观 checked_in(Realtime 恢复时自然校正)
+ *     - refetch 成功 + completed_by === currentUserId → checked_in
+ *     - refetch 成功 + completed_by !== currentUserId → spouse_completed
+ *   - sleep(500) 是固定 delay(等 SyncManager.replayQueue 走完 RPC)—
+ *     可优化为 event-driven 但留 T-FIX-06 polish
  */
 
 import { supabase } from '../lib/supabase';
@@ -44,6 +53,30 @@ import { enqueueAndApply } from '../lib/SyncManager';
 import { getTasks, type Task } from '../lib/LocalStore';
 import { getMyFamily } from './FamilyService';
 import type { TaskRow } from '../types/database';
+
+// =====================================================================
+// 0. Internal helpers
+// =====================================================================
+
+/**
+ * T-US005-2:enqueueAndApply 后等 SyncManager.replayQueue 走完 RPC 的固定 delay。
+ *
+ * 经验值:RPC 通常 200-400ms 完成 + refetch 网络 → 用户感知延迟 < 1s。
+ * 可优化为 event-driven(订阅 SyncManager event),但留 T-FIX-06 polish。
+ *
+ * ⚠️ 测试用:jest fake timer 可控 — 真实环境 RN 跨平台一致行为。
+ */
+const SPOUSE_DETECT_DELAY_MS = 500;
+
+/**
+ * sleep(ms) — 内部 helper(避免依赖外部 utils)。T-US005-2 spouse_completed
+ * refetch 前的固定 delay 用。
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 // =====================================================================
 // 1. Types
@@ -95,6 +128,18 @@ export type CheckInResult =
       completedBy: string;
       isMakeup: boolean;
     }
+  /**
+   * 配偶先完成 — T-US005-2:
+   * 服务端 RPC `checkin_task` 在配偶已 first-finisher 时返回 0 行,本服务 sleep(500)
+   * 后单 task refetch 主动确认 RPC 结果,若 completed_by !== currentUserId 则
+   * 返回此状态。UI 用 Alert.alert("配偶已先一步完成", "由配偶于 HH:MM 完成") 提示。
+   */
+  | {
+      status: 'spouse_completed';
+      taskId: string;
+      completedAt: string;
+      completedBy: string;
+    }
   | { status: 'failed'; reason: CheckInFailureReason };
 
 // =====================================================================
@@ -104,7 +149,7 @@ export type CheckInResult =
 /**
  * 一键打卡 — 调 `checkin_task` RPC。
  *
- * 流程:
+ * 流程(T-US005-2 升级后):
  *   1. **pre-check**:getMyFamily() 必须非 null
  *      - null → failed{reason: 'no_family'} 兜底
  *   2. 拿当前 `user.id`(`supabase.auth.getUser()`)
@@ -124,19 +169,23 @@ export type CheckInResult =
  *        b) enqueueMutation:写入 AsyncStorage FIFO queue(供离线时 replay)
  *        c) isOnline → 立即 replayQueue:executeOnServer → supabase.rpc('checkin_task')
  *      - 任意内部错误由 SyncManager 自身 swallow + console.warn(契约 line 23-24)
- *   5. **乐观检查**(replay 不阻塞 UI):读 LocalStore.getTasks() — task.completed_at 已被
- *      applyOptimisticUpdate 写入(同步 setTasksAndNotify 在 enqueueAndApply 入口同步路径)
- *      - 找到 completed_at → checked_in success
- *      - 找不到 → failed{reason: 'unknown'}(兜底 — 理论上几乎不发生,除非 race condition)
+ *   5. **T-US005-2 0 行处理 — sleep(500) + 单 task refetch**:
+ *      - 等 SyncManager.replayQueue 走完 RPC(realtime channel 也订阅了 tasks 表,
+ *        但本流程走 refetch 是为了**主动确认 RPC 结果**而非被动等推送)
+ *      - refetch `SELECT id, completed_at, completed_by, is_makeup FROM tasks WHERE id = ?`
+ *      - refetch 失败(network err)→ fallback 乐观 checked_in(Realtime 恢复时自然校正)
+ *      - refetch 成功:
+ *        - completed_by === currentUserId → checked_in
+ *        - completed_by !== currentUserId → **spouse_completed**
  *
- * ⚠️ sync 路径:复用了 SyncManager.enqueueAndApply 已实现的 offline 入队 + replay,
- *    本任务不再独立写 offline 兜底(reviewer 历史反馈点)。
+ * ⚠️ sleep(500) 经验值:RPC 通常 200-400ms 完成 + refetch 网络 → 用户感知延迟 < 1s
+ *    可优化为 event-driven(订阅 SyncManager event),但留 T-FIX-06 polish
  *
  * ⚠️ 0 行处理 / 配偶先完成:
- *    - 服务端 RPC 0 行(已 first-finisher complete)不会主动告知客户端
- *    - Realtime channel 已订阅 `tasks` 表(SyncManager line 222-230)→ UPDATE event 自动
- *      合并到 LocalStore→useTasks() 重新渲染→UI 显示 spouse_completed 态
- *    - 本 service 不主动 refetch 也不主动弹 toast(0 行处理留 T-US005-2)
+ *    - 服务端 RPC `checkin_task` 在配偶已 first-finisher 时返回 0 行(first-finisher wins)
+ *    - SyncManager.executeOnServer 对 0 行 result 静默通过(line 512-521)
+ *    - 本服务**主动 refetch**确认(不依赖 Realtime 推送时序)— UI 立即得到 spouse_completed
+ *    - Realtime 推送仍会兜底一次 update(SyncManager 已订阅)→ UI 状态自然收敛
  *
  * @param taskId    — 目标 task.id(UUID)
  * @param isMakeup  — 是否为补卡(本任务固定 false;T-US006 接入时改 signature 调 true);
@@ -163,6 +212,7 @@ export async function checkin(taskId: string, isMakeup: boolean = false): Promis
     console.warn('[CheckInService] checkin: getUser failed:', userErr?.message);
     return { status: 'failed', reason: 'not_authenticated' };
   }
+  const currentUserId = userData.user.id;
 
   // 3. 预读 task 状态(防御 — 避免 enqueue 后才发现任务 cancelled/已 completed)
   type PreCheckRow = Pick<
@@ -223,26 +273,74 @@ export async function checkin(taskId: string, isMakeup: boolean = false): Promis
     queuedAt: Date.now(),
   });
 
-  // 5. 乐观检查:enqueueAndApply 已同步写 cache(applyOptimisticUpdate 内 setTasksAndNotify);
-  //    此时 LocalStore 中该 task 应该已 completed_at 标记。读取 cache 拿最新值。
-  const cached = await getTasks();
-  const updated = cached.find((t: Task) => t.id === taskId);
-  if (updated && updated.completed_at !== null) {
+  // 5. T-US005-2: 主动 refetch 确认 RPC 结果(0 行处理)
+  //
+  // 流程:
+  //   - sleep(500) 等 SyncManager.replayQueue 走完 RPC(RPC 通常 200-400ms 完成)
+  //   - refetch tasks WHERE id = ?;若 completed_by !== currentUserId → 配偶先完成
+  //   - refetch 失败 → fallback 乐观 checked_in(Realtime channel 兜底)
+  await sleep(SPOUSE_DETECT_DELAY_MS);
+
+  type RefetchRow = Pick<TaskRow, 'id' | 'completed_at' | 'completed_by' | 'is_makeup'>;
+  const { data: refetched, error: refetchErr } = await supabase
+    .from('tasks')
+    .select('id, completed_at, completed_by, is_makeup')
+    .eq('id', taskId)
+    .maybeSingle<RefetchRow>();
+
+  if (refetchErr) {
+    // refetch 失败 → fallback 乐观 success(Realtime 推送时自然校正)
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] checkin: refetch failed, fallback to checked_in:', refetchErr.message);
+    const cached = await getTasks();
+    const optimistic = cached.find((t: Task) => t.id === taskId);
     return {
       status: 'checked_in',
-      taskId: updated.id,
-      completedAt: updated.completed_at,
-      // 乐观态用 'me' 占位(同 applyOptimisticUpdate 行为);realtime 校正时由
-      // server 真实 user.id 覆盖(通常是 userData.user.id 但我们不直接 leak)
-      completedBy: updated.completed_by ?? userData.user.id,
-      isMakeup: updated.is_makeup ?? isMakeup,
+      taskId,
+      completedAt: optimistic?.completed_at ?? new Date().toISOString(),
+      completedBy: optimistic?.completed_by ?? currentUserId,
+      isMakeup: optimistic?.is_makeup ?? isMakeup,
     };
   }
 
-  // 兜底:applyOptimisticUpdate 在 LocalStore 没找到 task(罕见 race / cache miss)
-  // eslint-disable-next-line no-console
-  console.warn('[CheckInService] checkin: task not in cache after enqueueAndApply');
-  return { status: 'failed', reason: 'unknown' };
+  if (!refetched) {
+    // refetch 返回 null row(理论上不应发生 — task 刚被 RPC 完成)→ fallback optimistic
+    // eslint-disable-next-line no-console
+    console.warn('[CheckInService] checkin: refetch returned null row, fallback to checked_in');
+    const cached = await getTasks();
+    const optimistic = cached.find((t: Task) => t.id === taskId);
+    return {
+      status: 'checked_in',
+      taskId,
+      completedAt: optimistic?.completed_at ?? new Date().toISOString(),
+      completedBy: optimistic?.completed_by ?? currentUserId,
+      isMakeup: optimistic?.is_makeup ?? isMakeup,
+    };
+  }
+
+  // refetched 成功 — 判定 spouse_completed
+  if (
+    refetched.completed_at !== null &&
+    refetched.completed_by !== null &&
+    refetched.completed_by !== currentUserId
+  ) {
+    // 配偶先完成
+    return {
+      status: 'spouse_completed',
+      taskId: refetched.id,
+      completedAt: refetched.completed_at,
+      completedBy: refetched.completed_by,
+    };
+  }
+
+  // 我先完成(完成者 = 我 or 完成者未知 fallback)
+  return {
+    status: 'checked_in',
+    taskId: refetched.id,
+    completedAt: refetched.completed_at ?? new Date().toISOString(),
+    completedBy: refetched.completed_by ?? currentUserId,
+    isMakeup: refetched.is_makeup,
+  };
 }
 
 // =====================================================================
