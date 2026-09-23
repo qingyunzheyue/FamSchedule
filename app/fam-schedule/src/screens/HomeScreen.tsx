@@ -1,8 +1,8 @@
 /**
- * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1 + T-US005-2
+ * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1 + T-US005-2 + T-US015-1
  *
  * 职责(US-002 故事 1/3 — 端到端任务可视化 + US-005 故事 1/4 — 列表打卡 +
- *       US-005 故事 2/4 — 配偶先完成 toast):
+ *       US-005 故事 2/4 — 配偶先完成 toast + US-015 故事 1/3 — 启动过期任务查询):
  *   1. mount 时通过 useSyncManager(familyId) 自动 subscribe + Realtime + pullSince
  *   2. 通过 useTasks() 订阅 SyncManager.tasksSnapshot,响应 setTasks / pullSince / realtime 变更
  *   3. URL `?view=today|week|all` 作为视图 source of truth,默认 today
@@ -16,6 +16,8 @@
  *      - checked_in(我先完成):UI 乐观切到 completed 态,no toast
  *      - spouse_completed(配偶先完成):Alert.alert("配偶已先一步完成", "由配偶于 HH:MM 完成")
  *      - failed:Alert 翻译失败 reason
+ *  10. **T-US015-1 新增**:启动过期任务查询 — useExpiredTaskCount hook 订阅 +
+ *      console.log 占位输出(留 T-US015-2 接 banner 渲染)
  *
  * 设计依据:
  *   - home-v1.0.md §3 布局 + §6 文案 + §7 a11y
@@ -26,6 +28,9 @@
  *   - **Header 简化版**:只渲染"任务列表"标题 + 右上角 + 按钮;不渲染大日期 + 时段问候
  *     (留 T-US002-2)。brief 明确说"❌ Header 大日期 + 时段问候"
  *   - **过期 banner**:无(留 T-US014 / T-US015)
+ *     - **T-US015-1**:useExpiredTaskCount hook 已挂上,console.log 占位输出
+ *     - **留 T-US015-2**:banner 组件 / N=0 不显示 / 点击跳过期列表
+ *     - **留 T-US015-3**:banner 关闭状态持久化
  *   - **Skeleton / OfflineBanner**:无(留 Wave 3)
  *   - **TaskCard 点击**:跳 task/[id](TaskDetailScreen)— T-US003-1 已闭环
  *   - **T-US003-2 列表 long-press 删除**:不走二次确认,直接删除 + Alert 已删除
@@ -45,9 +50,12 @@
  *   - throw(网络断等)→ Alert「网络异常」
  *
  * 不在本屏范围:
- *   - 任务详情页(T-US003)
+ *   - 任务详情页(T-US003)— T-US014-2 已闭环(详情页 OverdueBanner)
  *   - 创建任务(走 router.push 到 task-create route,T-US001-1 已闭环)
- *   - 过期 banner / Skeleton / 共同执行人 / 周期 / 共享(T-US002-2+ 后续)
+ *   - ExpiredTasksBanner 组件 / N=0 不显示 / 点击跳过期列表(留 T-US015-2)
+ *   - Banner 关闭状态持久化(留 T-US015-3)
+ *   - 过期任务列表 ExpiredTasksScreen(留 T-US015-3)
+ *   - 共同执行人 / 周期 / 共享(T-US009 / T-US004-1 / T-US010 后续)
  *   - 打卡历史 / 撤销打卡 / 补卡(US-005 / US-006 后续任务)
  *   - iOS Toast(留 T-FIX-06 polish)
  */
@@ -73,6 +81,7 @@ import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
 import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
+import { useExpiredTaskCount } from '../hooks/useExpiredTaskCount';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -341,6 +350,28 @@ export function HomeScreen(): React.JSX.Element {
   // ---- 当前用户 ID(T-US005-1)— 透传给 CheckInButton 用于派生 me / spouse 视觉 ----
 
   const currentUserId = useCurrentUserId();
+
+  // ---- T-US015-1: 启动过期任务查询 hook(本任务仅占位消费 count) ----
+  //
+  // 订阅 useExpiredTaskCount(today):
+  //   - 自动响应 Realtime tasks 推送(SyncManager 订阅 family_settings 也覆盖
+  //     settings UPDATE,本 hook 不显式监听 settings event)
+  //   - family 上下文变化 / today 跨日 时自动重算
+  //
+  // 本任务 scope 严格:**不**渲染 ExpiredTasksBanner 组件(留 T-US015-2)。
+  // 当前仅用 console.log 占位,便于开发验证 hook 工作 + 让后续 T-US015-2
+  // 接入 banner 时只需把 console.log 换成 <ExpiredTasksBanner count={count} />。
+  //
+  // 留 T-US015-2 范围:
+  //   - ❌ <ExpiredTasksBanner count={count} /> 组件渲染(留 T-US015-2)
+  //   - ❌ N=0 时不显示 banner(留 T-US015-2)
+  //   - ❌ 点击 banner 跳 ExpiredTasksScreen(留 T-US015-2 / T-US015-3)
+  //   - ❌ Banner 关闭状态持久化(留 T-US015-3)
+  const { count: expiredCount, loading: expiredLoading } = useExpiredTaskCount(today);
+
+  // 开发期占位 log:T-US015-2 接 banner 后删除此 console.log
+  // eslint-disable-next-line no-console
+  console.log('[HomeScreen] expired tasks count:', expiredCount, 'loading:', expiredLoading);
 
   // ---- 下拉刷新 ----
 

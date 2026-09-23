@@ -757,3 +757,110 @@ export function mapUndoCheckInFailureReason(reason: UndoCheckInFailureReason): s
       return '撤销失败,请重试';
   }
 }
+
+// =====================================================================
+// 12. T-US014-2: formatOverdueHours — 任务详情页过期 banner 文案派生
+// =====================================================================
+
+/**
+ * `formatOverdueHours` 的返回结构 — UI (OverdueBanner + TaskDetailScreen)
+ * 直接消费三字段:
+ *   - hours       : 已过期的精确小时数(纯数字;UI 可选展示给开发者调试,
+ *                    用户视角文案用 displayText)
+ *   - displayText : 已本地化的中文文案("刚刚过期" / "已过期 N 小时" /
+ *                   "已过期 N 天"),UI 直接渲染
+ *   - showBanner  : 是否显示 banner 的布尔判定(task 已完成 / 已取消 /
+ *                   task_date 仍在未来 → false)
+ *
+ * 设计动机(任务 brief §C.2 + 设计 task-detail-v1.0 §3.2):
+ *   - 集中文案派生到本模块,UI 层(OverdueBanner)只接收 prop 不做日期运算
+ *   - showBanner 派生条件与 `computeTaskBadge` overdue kind 严格对齐
+ *     (cancelled / completed_at / task_date ≥ today 三态排除)— 保证 banner
+ *     与 TaskCard 红 chip / 红竖条视觉同步,避免"卡片显示过期但 banner 不显示"
+ *     或反向的不一致
+ *   - 文案随 hours 数智能切换单位(< 1 小时 → "刚刚过期";< 24 小时 →
+ *     "已过期 N 小时";≥ 24 小时 → "已过期 N 天"),贴合用户对"过期时长"
+ *     的认知(任务 brief §B 明确文案格式)
+ *
+ * 不在范围:
+ *   - ❌ 补卡按钮逻辑(留 T-US006)— UI 层 OverdueBanner 按钮当前 Alert placeholder
+ *   - ❌ 时分秒精度(< 1 小时场景只显示"刚刚过期",不显示"过期 30 分钟")
+ *   - ❌ 不同 locale 的 i18n(本期仅中文;未来 react-i18next)
+ */
+export interface OverdueInfo {
+  /** 已过期小时数(精确,基于 now - task_date - task_time 的差)。 */
+  hours: number;
+  /** 已本地化的中文文案("刚刚过期" / "已过期 N 小时" / "已过期 N 天")。 */
+  displayText: string;
+  /** 是否显示 banner(true = 任务确实处于过期未完成态)。 */
+  showBanner: boolean;
+}
+
+/**
+ * 给定 task + 当前 epoch ms(now),导出过期 banner 派生信息。
+ *
+ * 派生规则:
+ *   1. 排除态(不显示 banner)— showBanner=false / hours=0 / displayText='':
+ *      - task.cancelled === true
+ *      - task.completed_at 非 null(已完成不再过期)
+ *      - task.task_date >= today(未来 / 当天,不算过期)
+ *   2. 计算过期小时数:
+ *      - taskDateTime = parseISO(`${task.task_date}T${task.task_time ?? '23:59:59'}`)
+ *        - task_time 为 null 时 fallback 到当天 23:59:59(全天任务视作"当天最后一秒"过期起点)
+ *      - elapsedMs = max(0, now - taskDateTime)(防御 now < taskDateTime 的时钟漂移)
+ *      - hours = floor(elapsedMs / 3_600_000)
+ *   3. 文案派生:
+ *      - hours < 1   → "刚刚过期"(刚跨过过期起点不到 1 小时)
+ *      - hours < 24  → `已过期 ${hours} 小时`(整数小时)
+ *      - hours ≥ 24  → `已过期 ${days} 天`(days = floor(hours / 24))
+ *
+ * now 参数:接受 epoch ms(数字)便于 jest 测试固定时间,避免 Date.now() 漂移。
+ *
+ * 设计决策(task_time null 的处理):
+ *   - 全天任务(task_time null)→ 用 23:59:59 作为过期起点(当天最后一秒过期,
+ *     与设计 §3.2 "全天" 概念一致:用户认为"今天整天" 过期)
+ *   - 这样 today 当天创建的全天任务,hours 计算结果 = 0 → displayText = "刚刚过期"
+ *     (合理:刚创建的全天任务不应被立即判定为过期)
+ *   - 今天之前的全天任务 → 实际过期天数 ≥ 1 → displayText 准确
+ *
+ * 设计决策(now < taskDateTime 时钟漂移):
+ *   - 防御性 max(0, ...) 保证 hours ≥ 0,不会因 system clock 抖动返回负数
+ *   - 这通常意味着 task 刚被编辑/创建,实际 hours 极小 → displayText 走"刚刚过期"
+ *
+ * @param task — 任务行(完整 TaskRow)— cancelled / completed_at / task_date /
+ *               task_time 四个字段全部消费
+ * @param now  — 当前 epoch 毫秒(由 UI 注入便于单测;生产代码传 Date.now())
+ * @returns OverdueInfo — UI 直接消费
+ */
+export function formatOverdueHours(task: TaskRow, now: number): OverdueInfo {
+  // 排除态 — 与 computeTaskBadge.overdue 的派生条件保持完全一致(共享排除语义)
+  if (task.cancelled || task.completed_at) {
+    return { hours: 0, displayText: '', showBanner: false };
+  }
+
+  // task_date ≥ today → 不算过期
+  // today 从 now 派生(本地时区 'YYYY-MM-DD')。防御:不接受外部 today 参数,
+  // 避免 caller 传错导致 banner 与 TaskCard 红 chip 不同步 — 内部派生保证一致。
+  const todayFromNow = toLocalIsoDate(new Date(now));
+  if (task.task_date >= todayFromNow) {
+    return { hours: 0, displayText: '', showBanner: false };
+  }
+
+  // 算过期小时数
+  // task_time null → fallback '23:59:59'(全天任务视作当天最后一秒过期)
+  const timeStr = task.task_time ?? '23:59:59';
+  // 防御:task_time 可能是 'HH:MM:SS' 也可能是 'HH:MM';new Date 接受两种都 OK
+  const taskDateTime = new Date(`${task.task_date}T${timeStr}`).getTime();
+  // 防御:NaN(非法 task_date / task_time)→ elapsed = 0
+  const elapsedMs = Number.isFinite(taskDateTime) ? Math.max(0, now - taskDateTime) : 0;
+  const hours = Math.floor(elapsedMs / 3_600_000);
+
+  if (hours < 1) {
+    return { hours, displayText: '刚刚过期', showBanner: true };
+  }
+  if (hours < 24) {
+    return { hours, displayText: `已过期 ${hours} 小时`, showBanner: true };
+  }
+  const days = Math.floor(hours / 24);
+  return { hours, displayText: `已过期 ${days} 天`, showBanner: true };
+}

@@ -1,11 +1,13 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4 + T-US014-2
  *
- * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成):
+ * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成
+ *       + US-014 故事 2/2 — 详情页过期 banner):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 渲染 task-detail-v1.0.md §3.1 布局的**简化版**:
  *      - Header:← 返回 + 标题"任务详情" + 右上角 ⋮ 菜单
+ *      - **T-US014-2 新增** 过期 banner(TaskHero 之上,条件渲染)
  *      - TaskHero:title + 时间行 + **T-US005-1 新增** 主按钮区(CheckInButton 替换 placeholder)
  *      - 备注(如有)
  *      - 指派人
@@ -23,13 +25,13 @@
  *      - failed:Alert "打卡失败" + 翻译 reason
  *
  * 设计依据:
- *   - 任务 detail-v1.0.md §3.1 / §3.4 / §6 文案 / §7 a11y
+ *   - 任务 detail-v1.0.md §3.1 / §3.2 / §3.4 / §6 文案 / §7 a11y
  *   - 任务 brief §C.2 + T-US003-2 brief §C + T-US005-1 brief §C.4 + T-US005-2 brief
  *   - 设计 task-detail-v1.0 §10:配偶先完成用 Toast(本任务用 Alert 跨平台一致,留 polish)
  *
  * 简化决策(明确记录 — dev self-acknowledge scope):
  *   - ❌ 不做撤销 button(留 T-US005-3)— CheckInButton 在 completed 态下点击 noop
- *   - ❌ 不做过期 banner(留 T-US014)
+ *   - ❌ 不做过期 banner(留 T-US014)— **T-US014-2 已完成**(OverdueBanner 组件 + TaskHero 上方条件渲染)
  *   - ✅ T-US003-2:删除走 RN Alert 二次确认(短期)→ 后续 polish 换 Tamagui Dialog
  *   - ❌ 模板任务删除(留 T-US004-1)— Alert "模板任务暂不支持删除"
  *   - ✅ ⋮ 菜单的"编辑"跳页 + "复制为新任务" 占位 Alert
@@ -40,6 +42,10 @@
  *                    配偶在另一台 device 打卡 / 编辑 / 删除同一 task 时,本屏需 Realtime 推送
  *                    更新(否则要 back → re-enter 才看到最新态)。useSyncManager 内置
  *                    AppState 切换处理(后台 → unsubscribe / 前台 → resubscribe)。
+ *   - ✅ **T-US014-2**:过期 banner — formatOverdueHours 派生 showBanner + displayText,
+ *                    与 computeTaskBadge.overdue 同源(共享 task_date < today / !cancelled /
+ *                    !completed_at 三态排除)保证 banner 与 TaskCard 红 chip / 红竖条视觉同步;
+ *                    补卡按钮 placeholder Alert(留 T-US006 真补卡 RPC)
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
@@ -61,11 +67,20 @@
  *     - failed → Alert "打卡失败" + mapCheckInFailureReason
  *   - ADR-005 contract 守住:CheckInService 不直接 supabase.rpc(走 SyncManager + SELECT refetch)
  *
+ * T-US014-2 行为:
+ *   - **overdueInfo = formatOverdueHours(task, Date.now())** 派生 {hours, displayText, showBanner}
+ *   - 渲染于 ScrollView 顶部 TaskHero 之上,showBanner=true 才输出 OverdueBanner 组件
+ *   - 与 computeTaskBadge.overdue kind 同源(共享 task_date < today / !cancelled / !completed_at 三态排除)
+ *     保证 banner 与 TaskCard 红 chip / 红竖条视觉同步
+ *   - "补卡"按钮 onMakeUp 当前 noop(OverdueBanner 内部 Alert placeholder 提示用户;
+ *     真补卡 RPC 留 T-US006 接 checkin_task p_is_makeup=true)
+ *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
  *   - 各分组 `accessibilityRole="summary"`
  *   - ⋮ 按钮 `accessibilityRole="button"` label "更多操作"
  *   - CheckInButton 自带独立 a11y label(转给 task-detail §7)
+ *   - OverdueBanner 自带独立 a11y(role="alert" + label 含补卡动作提示)
  *
  * 测试策略:
  *   - **不**渲染组件本身(jest-expo + Tamagui 限制)
@@ -96,6 +111,7 @@ import { useTasks } from '../hooks/useTasks';
 import { useSyncManager } from '../lib/SyncManager';
 import { formatTaskTime, computeTaskBadge } from '../lib/taskListFilters';
 import {
+  formatOverdueHours,
   mapDeleteFailureReason,
   mapCheckInFailureReason,
   mapCheckInResultToToast,
@@ -105,6 +121,7 @@ import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
 import { showConfirmDialog } from '../components/ConfirmDialog';
 import { CheckInButton } from '../components/CheckInButton';
+import { OverdueBanner } from '../components/OverdueBanner';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -310,6 +327,30 @@ export function TaskDetailScreen(): React.JSX.Element {
     [],
   );
 
+  // -------------------------------------------------------------------------
+  // T-US014-2: 过期 banner 派生
+  // -------------------------------------------------------------------------
+  //
+  // 派生 banner 显示与否 — 与 computeTaskBadge.overdue kind 严格对齐:
+  //   - formatOverdueHours(task, Date.now()) 内部已消费 task.cancelled /
+  //     completed_at / task_date ≥ today 三态排除,showBanner 布尔直接用
+  //   - displayText 由 formatter 派生(刚刚过期 / 已过期 N 小时 / 已过期 N 天)
+  //   - 与 TaskCard 红 chip / 红竖条同源派生,保证视觉同步(避免 banner 与
+  //     卡片显示不同步的不一致)
+  //
+  // 简化决策:
+  //   - 真补卡逻辑留 T-US006 — 当前 onMakeUp 由 OverdueBanner 内部 Alert
+  //     placeholder 处理(无 task prop 注入,避免 banner 重渲染开销)
+  //   - now = Date.now() 在 useMemo 内部计算,每次 render 重新评估;
+  //     用户停留详情页期间 timer 自然推进 → 不会跨小时 boundary 时 banner
+  //     文案不更新(留 T-FIX-06 polish 加 setInterval 重算)
+  const overdueInfo = useMemo(
+    () => (task ? formatOverdueHours(task, Date.now()) : null),
+    // task 引用变化(Realtime 推送)+ 同一 render 内 Date.now() 漂移可忽略
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [task],
+  );
+
   /**
    * 删除当前 task(T-US003-2):
    *   - 模板任务 → Alert "模板任务暂不支持删除"(占位)
@@ -427,6 +468,18 @@ export function TaskDetailScreen(): React.JSX.Element {
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* T-US014-2:过期 banner(TaskHero 之上,详情页顶部) */}
+          {overdueInfo?.showBanner ? (
+            <OverdueBanner
+              message={overdueInfo.displayText}
+              onMakeUp={() => {
+                // 本任务 placeholder:OverdueBanner 内部 Alert 提示"补卡功能等 T-US006 接入"
+                // 真正的补卡 RPC(checkin_task p_is_makeup=true)留 T-US006
+                // 父层 handler 当前 noop — 留 hook 位置给后续 T-US006 接入
+              }}
+            />
+          ) : null}
+
           {/* TaskHero */}
           <TaskHero task={task} badgeLabel={badge?.label ?? ''} />
 
