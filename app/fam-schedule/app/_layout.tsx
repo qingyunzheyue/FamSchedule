@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { SplashScreen as ExpoSplashScreen, Stack, Redirect, useRouter, usePathname } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
@@ -115,14 +116,21 @@ function Gate() {
   const { isLoading, session, bootError, retryBoot } = useAuth();
   const family = useFamily();
 
+  // T-FIX-BUNDLE-3:Expo Go SDK 53+ 不支持 expo-notifications 的远程推送 / 本地通知 device API
+  // (会直接抛 "removed from Expo Go" error,详见 Expo 公告)。在 dev build / production / standalone
+  // 仍正常工作 — 只跳过 init + permission,不跳过其他业务逻辑。
+  const isExpoGo = Constants.executionEnvironment === 'storeClient';
+
   // T-FIX-03 (1/2):eager init — 装 handler / 配 channel / 注册 listener / cold-start
   // **不弹权限框**。失败仅 warn,不阻塞渲染(无权限仍可继续进入 app,只是不响通知)。
   useEffect(() => {
+    // T-FIX-BUNDLE-3:Expo Go SDK 53+ 不支持 expo-notifications
+    if (isExpoGo) return;
     initNotificationScheduler().catch((e) => {
       // eslint-disable-next-line no-console
       console.warn('[Gate] NotificationScheduler init failed:', e);
     });
-  }, []);
+  }, [isExpoGo]);
 
   // T-FIX-03 (2/2):gated permission request — 仅在用户已登录且加入/创建家庭后弹框。
   // 双重保险:`session` 防 anon sign-in 抢跑,`family.status === 'in_family'` 防 onboarding 阶段抢跑。
@@ -130,12 +138,14 @@ function Gate() {
   // → 本 effect 触发 → 弹原生权限框(用户此时看到任务首页 push 完成,理解通知的用途)。
   const inFamilyId = family.state.status === 'in_family' ? family.state.value.family.id : null;
   useEffect(() => {
+    // T-FIX-BUNDLE-3:Expo Go SDK 53+ 不支持 expo-notifications
+    if (isExpoGo) return;
     if (!session || !inFamilyId) return;
     requestNotificationPermission().catch((e) => {
       // eslint-disable-next-line no-console
       console.warn('[Gate] NotificationScheduler requestNotificationPermission failed:', e);
     });
-  }, [session, inFamilyId]);
+  }, [isExpoGo, session, inFamilyId]);
 
   // 引导完成(创建或加入家庭)后,family 状态切到 in_family → 主动 push 到 home
   // Expo Router 用 router.replace 而非 Redirect 组件,以保证
