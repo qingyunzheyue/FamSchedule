@@ -1034,7 +1034,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: P1
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done(2026-10-06)— Home 顶部过期 banner 完整闭环。新建 `src/components/ExpiredTasksBanner.tsx`(~237 行,带 memo + formatExpiredBannerText 纯函数 + 视觉与 home-v1.0 §3.3 完全对齐:12px 圆角 + warning 浅底 #FBEAE6 + 描边 #F0C9BD + ⚠ icon + 查看 →)+ `__tests__/ExpiredTasksBanner.test.tsx` NEW 26 用例全 pass + `HomeScreen.tsx` console.log 占位替换为 `<ExpiredTasksBanner count={expiredCount} loading={expiredLoading} onPress={handleExpiredBannerPress} />`(挂 Header 下 / SegmentedTab 上),useCallback noop 稳定引用避免 TaskList re-render 联动;`jest --silent` 603/603 pass(原 577 + 26 新,零回归);`tsc --noEmit` 1 pre-existing 错(settings/index.tsx:62 expo-router Href 类型,与本任务无关,verified by git stash test);Android bundle export 成功(4992 modules, 50s);review PASS(commit `e93bd79`,已 push);严格 scope 不做跳转(T-US015-3)/关闭状态持久化/补卡 RPC(T-US006)/颜色 token 集中化(留 T-FIX-BUNDLE 后续)/NaN gate(Minor #1 不阻塞,Caller 契约保证);US-015 2/3 ✅。
 - **Definition of Done**:
   - N = 0 → 不显示
   - N > 0 → 顶部 banner: "你有 N 个任务过期未完成,点击查看"
