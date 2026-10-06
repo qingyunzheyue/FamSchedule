@@ -84,11 +84,14 @@ export default function RootLayout() {
     }
   }, [fontsLoaded, fontError]);
 
-  // T-FIX-BUNDLE-9:sticky guard — 字体一旦加载过(fontsEverLoadedRef.current=true),
-  // 后续即使 fontsLoaded 短暂 false 也不 unmount 子树。
-  if (!fontsEverLoadedRef.current && !fontsLoaded && !fontError) {
-    return null;
-  }
+  // T-FIX-BUNDLE-10:**完全移除** return null 守卫。
+  // 真机验证 BUNDLE-9 sticky flag 仍不够 — UNMOUNTED → mounted 反复出现,
+  //   说明 useFonts 在 RN 0.86 + Expo SDK 57 + Expo Go 上有更深的 bug,
+  //   让 fontsLoaded 反复抖动,即使 sticky flag 也不能完全保住子树。
+  // 修法:不再因为 fontsLoaded 阻塞渲染。让 Tamagui 始终渲染(字体未加载时
+  //   Tamagui 内部 fallback 到 system font),保证根 layout 永不被卸载。
+  // useFonts / fontsEverLoadedRef 仍保留供日后排查用。
+  // 副作用:字体未加载时用户看到 fallback 字体(<1 秒) — 比 splash 闪烁好得多。
 
   return (
     <TamaguiProvider config={config} defaultTheme="light">
