@@ -66,7 +66,7 @@
  *   - iOS Toast(留 T-FIX-06 polish)
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, StyleSheet, View, Text, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Button, XStack, YStack } from 'tamagui';
@@ -86,6 +86,8 @@ import {
 import { SegmentedTab } from '../components/SegmentedTab';
 import { TaskList } from '../components/TaskList';
 import { ExpiredTasksBanner } from '../components/ExpiredTasksBanner';
+import { showConfirmDialog } from '../components/ConfirmDialog';
+import { canLongPressDeleteTask } from '../lib/longPressDeletePolicy';
 import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
 import { useExpiredTaskCount } from '../hooks/useExpiredTaskCount';
@@ -128,6 +130,13 @@ const LONGPRESS_TEMPLATE_BLOCKED_TITLE = '模板任务暂不支持删除';
 const LONGPRESS_TEMPLATE_BLOCKED_MESSAGE = '请进详情页操作';
 const LONGPRESS_DELETE_FAILED_TITLE = '删除失败';
 const LONGPRESS_DELETE_FAILED_OK_LABEL = '好';
+/** T-FIX-06-A M08 列表 long-press 二次确认 Dialog 文案 */
+const LONGPRESS_CONFIRM_TITLE = '删除这个任务?';
+const LONGPRESS_CONFIRM_LABEL = '删除';
+const LONGPRESS_CONFIRM_CANCEL_LABEL = '取消';
+/** T-FIX-06-A M09 owner pre-check 文案(配偶先完成后,不允许长按删除) */
+const LONGPRESS_SPOUSE_DONE_TITLE = '配偶已完成';
+const LONGPRESS_SPOUSE_DONE_MESSAGE = '此任务由配偶先完成,无法删除';
 
 const VIEW_MODES: ReadonlyArray<ViewMode> = ['today', 'week', 'all'];
 
@@ -268,28 +277,61 @@ export function HomeScreen(): React.JSX.Element {
   //   - 仅一次性任务(template_id === null)走 DELETE
   //   - 模板任务 → Alert "模板任务暂不支持删除,请进详情页操作"
   //   - 失败 → Alert "删除失败" + mapDeleteFailureReason 翻译
+  //
+  // ---- T-FIX-06-A 升级 ----
+  //   - M09 owner pre-check:已完成的任务若 completed_by !== currentUserId(配偶先完成),
+  //     直接拒绝删除 — 防止用户误删配偶完成的任务(无服务端级联 undo_checkin 兜底)。
+  //   - M08 二次确认:走到删除前弹 showConfirmDialog,confirm 后才调 TaskService.deleteTask。
+  //     dismiss/cancel → 关闭 Dialog,不做任何操作。
+  //   - 失败/已删除 Alert 文案保留(已有 mapDeleteFailureReason 翻译)。
+  //
+  // currentUserId 通过 ref 引用:避免 useCallback 依赖 currentUserId 变化导致回调重建,
+  // 继而 TaskList memo 失效连带整列 TaskCard re-render。handleTaskLongPress 内读
+  // `currentUserIdRef.current` 永远是最新值(切 user 后下一次长按就生效)。
   const handleTaskLongPress = useCallback(async (task: Task): Promise<void> => {
-    // 模板任务分支:占位,留 T-US004-1 后做整系列级联
-    if (task.template_id !== null) {
+    // pre-check:3 分支(template / spouse_done / ok)— 用纯函数决策便于单测。
+    const decision = canLongPressDeleteTask(task, currentUserIdRef.current);
+    if (decision === 'template') {
       Alert.alert(LONGPRESS_TEMPLATE_BLOCKED_TITLE, LONGPRESS_TEMPLATE_BLOCKED_MESSAGE);
       return;
     }
-
-    const result = await TaskService.deleteTask(task.id);
-    if (result.status === 'deleted') {
-      // 列表走 useTasks() 订阅,SyncManager.realtime 会自然刷新,无需手动 setTasks
-      Alert.alert(
-        LONGPRESS_DELETED_TITLE,
-        `${LONGPRESS_DELETED_MESSAGE_PREFIX}${task.title}${LONGPRESS_DELETED_MESSAGE_SUFFIX}`,
-        [{ text: LONGPRESS_DELETED_OK_LABEL, style: 'default' }],
-      );
-    } else {
-      Alert.alert(
-        LONGPRESS_DELETE_FAILED_TITLE,
-        mapDeleteFailureReason(result.reason),
-        [{ text: LONGPRESS_DELETE_FAILED_OK_LABEL, style: 'default' }],
-      );
+    if (decision === 'spouse_done') {
+      Alert.alert(LONGPRESS_SPOUSE_DONE_TITLE, LONGPRESS_SPOUSE_DONE_MESSAGE);
+      return;
     }
+
+    // T-FIX-06-A M08 二次确认:确认后才真删。
+    // onConfirm 内调 TaskService.deleteTask + 失败/已删除 Alert。
+    // onCancel 是空 noop(用户主动 dismiss)。
+    showConfirmDialog({
+      title: LONGPRESS_CONFIRM_TITLE,
+      message: `任务"${task.title}"将被删除,无法恢复。`,
+      confirmLabel: LONGPRESS_CONFIRM_LABEL,
+      cancelLabel: LONGPRESS_CONFIRM_CANCEL_LABEL,
+      destructive: true,
+      onCancel: () => {
+        // 用户取消:no-op,Dialog 关闭即结束
+      },
+      onConfirm: () => {
+        void (async () => {
+          const result = await TaskService.deleteTask(task.id);
+          if (result.status === 'deleted') {
+            // 列表走 useTasks() 订阅,SyncManager.realtime 会自然刷新,无需手动 setTasks
+            Alert.alert(
+              LONGPRESS_DELETED_TITLE,
+              `${LONGPRESS_DELETED_MESSAGE_PREFIX}${task.title}${LONGPRESS_DELETED_MESSAGE_SUFFIX}`,
+              [{ text: LONGPRESS_DELETED_OK_LABEL, style: 'default' }],
+            );
+          } else {
+            Alert.alert(
+              LONGPRESS_DELETE_FAILED_TITLE,
+              mapDeleteFailureReason(result.reason),
+              [{ text: LONGPRESS_DELETE_FAILED_OK_LABEL, style: 'default' }],
+            );
+          }
+        })();
+      },
+    });
   }, []);
 
   // ---- 任务打卡 — T-US005-1 + T-US005-2 ----
@@ -357,6 +399,15 @@ export function HomeScreen(): React.JSX.Element {
   // ---- 当前用户 ID(T-US005-1)— 透传给 CheckInButton 用于派生 me / spouse 视觉 ----
 
   const currentUserId = useCurrentUserId();
+
+  // T-FIX-06-A M08/M09:把 currentUserId 同步进 ref,让 handleTaskLongPress(useCallback 依赖
+  // 为空)能读到最新值 — 避免切 user 后旧 closure 拿到 stale currentUserId。
+  // 顺序:ref 必须放在 handleTaskLongPress 定义之后,因为 JS hoisting const 不友好;
+  // 但 useRef 在函数体内顺序与 ref 赋值 useEffect 无关(ref 是 mutable container)。
+  // 这里用 .current 赋值 effect:每次 render 都把 currentUserId 写进 ref,
+  // 让 handleTaskLongPress 内 `currentUserIdRef.current` 始终是最新值。
+  const currentUserIdRef = useRef<string>('');
+  currentUserIdRef.current = currentUserId;
 
   // ---- T-US015-2: 顶部过期 banner 渲染 ----
   //
