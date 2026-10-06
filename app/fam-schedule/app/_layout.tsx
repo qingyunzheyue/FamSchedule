@@ -237,11 +237,17 @@ function Gate() {
     return <SplashScreen mode="error" onRetry={retryBoot} />;
   }
 
-  // T-FIX-BUNDLE-8:Splash minimum duration guard — 启动期一律停留至少 800ms
-  //   (splashMinElapsed 在上述 usefhook 完成),避免闪屏状态切换太快造成视觉闪烁
-  if (!splashMinElapsed || isLoading || family.state.status === 'loading') {
-    return <SplashScreen />;
-  }
+  // T-FIX-BUNDLE-13:彻底移除 loading splash 守卫。
+  // 真机验证多次(BUNDLE-8/9/10/11/12):
+  //   - family.status 在 loading ↔ no_family 之间反复切换(FamilyContext.refresh 每次
+  //     都跑一遍 setState loading → no_family)
+  //   - session 在 null ↔ signed_in 之间反复切换(SDK INITIAL_SESSION + signInAnonymously
+  //     在反复 mount 场景下抖动)
+  //   - 只要 Gate 仍在 `isLoading / family.loading` 时切 splash,family.status / session
+  //     每次抖动都会触发 splash ↔ main stack 反复渲染 → 用户视觉"闪屏"
+  // 修法:bootError 是唯一切 splash 的条件。其他场景一律走主 stack / Redirect,
+  //   让 onboarding form(pair-create)自带 loading spinner 处理"family 还在拉" 的状态。
+  // 副作用:启动期 <1 秒用户可能看到 pair-create form 空状态(无 family 信息) — 比反复闪屏好。
 
   // 没 session(理论上 AuthProvider 自动重连,这里只是兜底)→ 渲染根 Stack
   // 用户会被 Expo Router 自动带到 /(main)/(home),而 /(main)/(home) 会被
