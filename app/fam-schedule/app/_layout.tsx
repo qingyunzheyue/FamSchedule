@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { SplashScreen as ExpoSplashScreen, Stack, Redirect, useRouter, usePathname } from 'expo-router';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { TamaguiProvider, Theme } from 'tamagui';
 
 import config from '../src/theme/tamagui.config';
@@ -116,6 +116,48 @@ function Gate() {
   const { isLoading, session, bootError, retryBoot } = useAuth();
   const family = useFamily();
 
+  // T-FIX-BUNDLE-8:Splash 最小停留 800ms — 防止状态抖动导致的视觉"闪屏"。
+  //   - 启动期 bootGuard / family.refresh 状态切换极频繁(<100ms 级别),如果 Gate 立即
+  //     跟着切 splash ↔ main,用户视觉上看到的是一闪一闪
+  //   - 强制 splash 至少停留 800ms,让底层 async 状态有缓冲时间收敛
+  //   - 用户感知从"闪烁"变成"splash 短暂显示" → 启动期一次性,不再反复
+  const SPLASH_MIN_DURATION_MS = 800;
+  const splashStartTimeRef = useRef<number | null>(null);
+  const [splashMinElapsed, setSplashMinElapsed] = useState(false);
+  if (splashStartTimeRef.current === null) {
+    splashStartTimeRef.current = Date.now();
+  }
+  useEffect(() => {
+    const elapsed = Date.now() - (splashStartTimeRef.current ?? Date.now());
+    if (elapsed >= SPLASH_MIN_DURATION_MS) {
+      setSplashMinElapsed(true);
+      return;
+    }
+    const timer = setTimeout(
+      () => setSplashMinElapsed(true),
+      SPLASH_MIN_DURATION_MS - elapsed,
+    );
+    return () => clearTimeout(timer);
+  }, []);
+
+  // T-FIX-BUNDLE-8:诊断 log — 用户报"splash 闪"但根因未定，记录 Gate 每次渲染的
+  //   关键状态变化。后续若仍闪,贴 dev server log 给我们做二次排查。
+  //   用 familyRef 缓存上次日志的 status,只在变化时打,避免 spam。
+  const lastGateLogRef = useRef<string>('');
+  const currentGateLogKey = `${bootError ? 'E' : '_'}|${isLoading ? 'L' : '_'}|${session ? 'S' : '_'}|${family.state.status}|${pathname}|${splashMinElapsed ? 'M' : '_'}`;
+  if (currentGateLogKey !== lastGateLogRef.current) {
+    lastGateLogRef.current = currentGateLogKey;
+    // eslint-disable-next-line no-console
+    console.log('[Gate]', {
+      bootError,
+      isLoading,
+      hasSession: !!session,
+      familyStatus: family.state.status,
+      pathname,
+      splashMinElapsed,
+    });
+  }
+
   // T-FIX-BUNDLE-3:Expo Go SDK 53+ 不支持 expo-notifications 的远程推送 / 本地通知 device API
   // (会直接抛 "removed from Expo Go" error,详见 Expo 公告)。在 dev build / production / standalone
   // 仍正常工作 — 只跳过 init + permission,不跳过其他业务逻辑。
@@ -171,8 +213,9 @@ function Gate() {
     return <SplashScreen mode="error" onRetry={retryBoot} />;
   }
 
-  // 任一加载未完成:显示 splash(loading 模式)
-  if (isLoading || family.state.status === 'loading') {
+  // T-FIX-BUNDLE-8:Splash minimum duration guard — 启动期一律停留至少 800ms
+  //   (splashMinElapsed 在上述 usefhook 完成),避免闪屏状态切换太快造成视觉闪烁
+  if (!splashMinElapsed || isLoading || family.state.status === 'loading') {
     return <SplashScreen />;
   }
 
