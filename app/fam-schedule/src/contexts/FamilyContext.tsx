@@ -87,6 +87,13 @@ export function FamilyProvider({ children }: FamilyProviderProps) {
   const { session } = useAuth();
   const [state, setState] = useState<FamilyState>({ status: 'loading' });
 
+  // T-FIX-BUNDLE-7:stateRef — 让 refresh 内部读 prev state 但不写 deps,
+  //   避免 refresh 在 state 变时重生成(useEffect deps [refresh] 会触发反复跑)。
+  const stateRefValue = useRef(state);
+  useEffect(() => {
+    stateRefValue.current = state;
+  }, [state]);
+
   /**
    * 重新拉 family 状态:
    *   - 没 session → no_family(AuthProvider 应已拦住,这里兜底)
@@ -95,10 +102,39 @@ export function FamilyProvider({ children }: FamilyProviderProps) {
    *     - 返回 null → no_family(RLS 兜底或真没 family)
    *
    * refresh 期间切到 loading 状态,UI(Gate)渲染 SplashScreen,不闪业务屏。
+   *
+   * T-FIX-BUNDLE-7:stable skip — 如果当前 state 已经是 in_family 且 family.id 与
+   *   session 期望的 family 一致,**不要**切到 loading(避免 splash 闪)。但当 refresh
+   *   是显式调用(createFamily / acceptInvite 成功后)时,仍要切 loading 触发 UI 重渲染。
+   *   - 隐式 refresh(依赖 deps 触发):skip → 防止 session 反复触发 splash 闪
+   *   - 显式 refresh(refresh() 调):不 skip → 业务需要感知状态变化
+   *
+   * 当前实现:接受 `skipIfStable` 参数(默认 false 显式),effect 自动 refresh 时传 true。
+   * 这样 createFamily / acceptInvite 后手动 refresh() 仍走 loading,session 抖动触发的
+   * 隐式 refresh 走 skip 路径。
    */
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (skipIfStable = false): Promise<void> => {
     if (!session) {
       setState({ status: 'no_family' });
+      return;
+    }
+
+    // T-FIX-BUNDLE-7:稳定态保护 — 通过 stateRef 读 prev state,不写 deps 避免死循环。
+    // 当前 in_family 且 skipIfStable 是 true → 不切 loading(避免 session 抖动 splash 闪)
+    const prevState = stateRefValue.current;
+    if (skipIfStable && prevState.status === 'in_family') {
+      try {
+        const value = await familyServiceGetMyFamily();
+        // 即使 skip loading,family 内容仍需更新(成员变化 / myRole 变化)
+        if (value) {
+          setState({ status: 'in_family', value });
+        }
+        // null → 保持原 state(用户没家族成员关系,但已有 family 时不强行切 no_family)
+      } catch (err) {
+        // FamilyService.getMyFamily 不抛(内部 try/catch);理论上不到这。
+        // eslint-disable-next-line no-console
+        console.error('[FamilyContext] refresh threw unexpectedly:', err);
+      }
       return;
     }
 
@@ -117,6 +153,8 @@ export function FamilyProvider({ children }: FamilyProviderProps) {
       console.error('[FamilyContext] refresh threw unexpectedly:', err);
       setState({ status: 'no_family' });
     }
+    // deps 故意只放 session:refresh 在 session 变时重生成,state 通过 ref 读,
+    // 避免 refresh 在 state 变时重生成 → useEffect 死循环。
   }, [session]);
 
   /**
@@ -127,7 +165,10 @@ export function FamilyProvider({ children }: FamilyProviderProps) {
    * 做 deps 即可保证 session 变 → refresh 重生成 → effect 重跑。
    */
   useEffect(() => {
-    void refresh();
+    // T-FIX-BUNDLE-7:effect 自动触发时传 skipIfStable=true — session 抖动触发的
+    // 隐式 refresh 走 skip 路径(不再切 loading),防止 splash 闪烁。
+    // 显式 refresh(refresh() 调用)— 不传 → 走 loading 路径,业务感知状态变化。
+    void refresh(true);
   }, [refresh]);
 
   const value = useMemo<FamilyContextValue_Export>(

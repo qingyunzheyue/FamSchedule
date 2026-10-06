@@ -74,6 +74,31 @@ export type AuthState =
 let unsubscribeAuthListener: (() => void) | null = null;
 
 /**
+ * T-FIX-BUNDLE-7:Auto-reconnect 锁 — 防止 SIGNED_OUT → signIn → SDK 立即又发 SIGNED_OUT
+ * → 死循环。splash 闪烁的真正根因之一(真机验证反馈:用户多次看到 splash 一闪而过)。
+ *
+ * 触发场景:
+ *   - anon sign-in 成功后 SDK 在某些边界立即 emit SIGNED_OUT(token 校验延迟 /
+ *     server 端策略 / refresh token 未持久化 等)
+ *   - 不加锁 → 立即触发新的 signInAnonymously → 又 SIGNED_OUT → 无限循环
+ *   - session 反复 null ↔ signed_in → AuthContext.setSession 反复 → FamilyContext
+ *     refresh 反复跑 → family.state.status 在 'loading' ↔ 'in_family' 之间反复切
+ *     → Gate 渲染 SplashScreen ↔ main stack → 视觉"闪屏"
+ *
+ * 锁语义:
+ *   - 锁住时:**仍** emit signed_out(让消费侧感知),但**不**触发新的 auto-signInAnonymously
+ *   - 锁在 signInAnonymously 完成(resolve)后立即释放,允许下一次 SIGNED_OUT 重连
+ *   - 即使卡死/throw 也设超时释放(setTimeout 5s)— 兜底,不影响正常流程
+ *
+ * 不影响正常流程:
+ *   - 用户主动 signOut:走 intentionalSignOutFlag,不走 auto-reconnect 路径
+ *   - 正常 session expire + 一次性 reconnect:锁释放后下一次 SIGNED_OUT 可重连
+ */
+let autoReconnecting = false;
+let autoReconnectReleaseAt: number | null = null;
+const AUTORECONNECT_LOCK_TIMEOUT_MS = 5000;
+
+/**
  * "用户主动登出"标记 — 一次性 flag。
  *
  * 触发流程:
@@ -325,6 +350,23 @@ async function handleAuthStateEvent(
       return;
     }
 
+    // T-FIX-BUNDLE-7:Auto-reconnect 锁 — 防止 SIGNED_OUT → signIn → 立即又 SIGNED_OUT 死循环
+    // 锁期间 emit signed_out(让消费侧感知当前状态),但不触发新的 auto-signInAnonym
+    if (autoReconnecting) {
+      onChange({ status: 'signed_out' });
+      return;
+    }
+
+    autoReconnecting = true;
+    // 兜底:即使 signInAnonymously 卡死/throw,5s 后也强制释放锁,允许下次重连
+    const releaseTimer = setTimeout(() => {
+      if (autoReconnectReleaseAt && Date.now() >= autoReconnectReleaseAt) {
+        autoReconnecting = false;
+        autoReconnectReleaseAt = null;
+      }
+    }, AUTORECONNECT_LOCK_TIMEOUT_MS);
+    autoReconnectReleaseAt = Date.now() + AUTORECONNECT_LOCK_TIMEOUT_MS;
+
     // 非主动登出(session 过期 / token refresh 失败 / server 端踢人)
     // → 先 emit signed_out 反映当前状态,再自动重连
     onChange({ status: 'signed_out' });
@@ -336,6 +378,10 @@ async function handleAuthStateEvent(
       // signInAnonymously 自己已 try/catch + 返回 signed_out;理论上不到这。
       // eslint-disable-next-line no-console
       console.warn('[AuthService] auto re-signIn threw unexpectedly:', e);
+    } finally {
+      clearTimeout(releaseTimer);
+      autoReconnecting = false;
+      autoReconnectReleaseAt = null;
     }
     return;
   }
