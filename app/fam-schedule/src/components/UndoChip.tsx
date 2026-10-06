@@ -63,6 +63,14 @@ const HIT_SLOP = 8;
 export interface UndoChipProps {
   /** 当前 task(必需 — 用作派生输入 + 点击回调参数) */
   task: Task;
+  /**
+   * **T-FIX-06-B M12 新增**:可选 task 标题(用于 a11y label)— 屏幕阅读器朗读
+   * "撤销[任务名],剩余 X 分 Y 秒"比单纯"剩余 X 分 Y 秒"语义更清晰(让用户
+   * 知道撤销的是哪个任务,而不是个抽象动作)。
+   *
+   * 不传时 a11y label 退化到"撤销任务打卡,剩余 X 分 Y 秒"(防御式泛指)。
+   */
+  taskTitle?: string;
   /** 点击回调(消费方 HomeScreen / TaskDetailScreen 决定调 CheckInService.undoCheckin)。 */
   onUndo: (task: Task) => void | Promise<void>;
   /**
@@ -93,7 +101,7 @@ export interface UndoChipProps {
  *
  * Memo:memo 包过,同 task 引用稳定时跳过重渲染(消费方通常 useCallback handleTaskUndo)。
  */
-function UndoChipImpl({ task, onUndo, busy = false }: UndoChipProps): React.JSX.Element | null {
+function UndoChipImpl({ task, taskTitle, onUndo, busy = false }: UndoChipProps): React.JSX.Element | null {
   // 内部时间戳 — 每秒刷新触发 re-render → getUndoCountdown 重新派生 → 倒计时实时
   const [now, setNow] = useState<number>(() => Date.now());
 
@@ -122,6 +130,15 @@ function UndoChipImpl({ task, onUndo, busy = false }: UndoChipProps): React.JSX.
     void onUndo(task);
   }, [busy, onUndo, task]);
 
+  // -------------------- a11y label --------------------
+  //
+  // T-FIX-06-B M12 升级:屏幕阅读器朗读的 label 现在包含 task title + 剩余秒数。
+  // 原 label:`撤销打卡,剩余 4 分 32 秒`(仅时间片)→ 用户知道撤销按钮,但不知道
+  // 撤销的是什么任务(列表可能多任务并行 completed 态,仅时间不够区分)。
+  // 新 label:`撤销[任务名],剩余 X 分 Y 秒` 或 fallback `撤销任务打卡,剩余 ...`
+  //
+  // 设计权衡 — 用 buildUndoChipA11yLabel 纯函数便于 jest 锁契约 + 后续 i18n 友好。
+
   // -------------------- Render --------------------
 
   return (
@@ -130,7 +147,7 @@ function UndoChipImpl({ task, onUndo, busy = false }: UndoChipProps): React.JSX.
       disabled={busy}
       hitSlop={HIT_SLOP}
       accessibilityRole="button"
-      accessibilityLabel={state.a11yLabel}
+      accessibilityLabel={buildUndoChipA11yLabel(state.a11yLabel, taskTitle)}
       accessibilityState={{ busy, disabled: busy }}
       testID={`undo-chip-${task.id}`}
       style={({ pressed }) => [styles.chip, pressed && !busy ? styles.pressed : null]}
@@ -150,6 +167,39 @@ function UndoChipImpl({ task, onUndo, busy = false }: UndoChipProps): React.JSX.
  * task 引用更新会触发更新(派生新 completed_at / label)— 这是预期行为。
  */
 export const UndoChip = memo(UndoChipImpl);
+
+/**
+ * 构造 UndoChip 的 a11y label — T-FIX-06-B M12 升级:综合 task title + 倒计时。
+ *
+ * 设计动机:
+ *   - 原 label 只含"撤销打卡,剩余 X 分 Y 秒":屏幕阅读器朗读时,只能告知"有撤销
+ *     按钮 + 时间片",但不知道撤销的是哪个任务(列表多任务并行 completed 态时
+ *     仅靠秒数无法定位)
+ *   - 升级后:`"撤销[任务名],剩余 X 分 Y 秒"` 明确语义
+ *   - taskTitle 为空(理论上不应该,消费方应透传 task.title)— fallback 到通用
+ *     `"撤销任务打卡,剩余 X 分 Y 秒"`(与原 a11yLabel 风格对齐,避免引入第三种形态)
+ *
+ * @param baseA11yLabel  — getUndoCountdown 返回的原始 a11yLabel(`撤销打卡,剩余 X 分 Y 秒`)
+ * @param taskTitle      — 任务标题(消费方透传 task.title)
+ * @returns 升级后的 a11yLabel 字符串
+ */
+export function buildUndoChipA11yLabel(baseA11yLabel: string, taskTitle?: string): string {
+  // baseA11yLabel 形如 '撤销打卡,剩余 4 分 32 秒' 或 '撤销窗口已过期'(canUndo=false 路径)
+  // 后者不会到达 UndoChip render(已提前 null 返回),但防御式保留分支。
+  if (baseA11yLabel === '撤销窗口已过期') {
+    return baseA11yLabel;
+  }
+
+  // baseA11yLabel 形如 '撤销打卡,剩余 ...' → 在 "撤销打卡" 后插入任务名 + 顿号
+  const trimmedTitle = taskTitle?.trim() ?? '';
+  if (trimmedTitle.length === 0) {
+    // fallback:不引入新语义,只是把"撤销打卡"扩成"撤销任务打卡",与原 label 风格一致
+    return baseA11yLabel.replace('撤销打卡', '撤销任务打卡');
+  }
+
+  // 主路径:baseA11yLabel 的 "撤销打卡" → "撤销<任务名>"
+  return baseA11yLabel.replace('撤销打卡', `撤销${trimmedTitle}`);
+}
 
 // =====================================================================
 // 4. Styles

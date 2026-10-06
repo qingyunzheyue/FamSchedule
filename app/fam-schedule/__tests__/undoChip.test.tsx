@@ -16,7 +16,11 @@
  */
 
 import type { Task } from '../src/lib/LocalStore';
-import { UndoChip, type UndoChipProps } from '../src/components/UndoChip';
+import {
+  UndoChip,
+  buildUndoChipA11yLabel,
+  type UndoChipProps,
+} from '../src/components/UndoChip';
 import { UNDO_WINDOW_MS } from '../src/lib/checkIn';
 
 // ---- Mocks (避免 RN Alert + phosphor SVG fail) ----
@@ -222,6 +226,83 @@ describe('UndoChip — a11y attributes (typed contract — set in chip render pa
     const props: UndoChipProps = { ...BASE_PROPS };
     const expectedTestId = `undo-chip-${props.task.id}`;
     expect(expectedTestId).toBe(`undo-chip-${TASK_ID}`);
+  });
+});
+
+// =====================================================================
+// T-FIX-06-B M12 — UndoChip a11y label 含 task title(屏幕阅读器朗读清晰)
+// =====================================================================
+//
+// 覆盖范围:
+//   - buildUndoChipA11yLabel(baseLabel, taskTitle) 纯函数 — 4 个分支:
+//     1. taskTitle 有值 → 替换 "撤销打卡" 为 "撤销<任务名>"
+//     2. taskTitle 为 undefined → fallback 到 "撤销任务打卡,剩余 ..."
+//     3. taskTitle 为 '' 或纯空白 → 同 fallback(避免 label 出现 "撤销,剩余 ...")
+//     4. baseLabel 是 '撤销窗口已过期' → 透传不变(canUndo=false 不会到 chip 但防御性)
+//   - Props.taskTitle 可选 — 不传时 UndoChip 类型仍合法(向后兼容现有消费方)
+//   - chip.a11yLabel 集成派生:baseA11yLabel + taskTitle 一起进 buildUndoChipA11yLabel
+
+describe('UndoChip — buildUndoChipA11yLabel (T-FIX-06-B M12)', () => {
+  const baseLabel = '撤销打卡,剩余 4 分 32 秒';
+
+  it('inserts task title into a11y label when taskTitle provided', () => {
+    // 主路径:taskTitle 提供时,label 形如 "撤销<title>,剩余 X 分 Y 秒"
+    expect(buildUndoChipA11yLabel(baseLabel, '喂奶粉')).toBe(
+      '撤销喂奶粉,剩余 4 分 32 秒',
+    );
+  });
+
+  it('falls back to "撤销任务打卡" when taskTitle is undefined (defensive)', () => {
+    // 防御 — taskTitle 未传(理论上消费方都应透传,但消费方可以省略):
+    // 升级到 "撤销任务打卡,剩余 X 分 Y 秒"(原 label 风格,不引入第三种形态)
+    expect(buildUndoChipA11yLabel(baseLabel, undefined)).toBe(
+      '撤销任务打卡,剩余 4 分 32 秒',
+    );
+  });
+
+  it('falls back to "撤销任务打卡" when taskTitle is empty string', () => {
+    expect(buildUndoChipA11yLabel(baseLabel, '')).toBe(
+      '撤销任务打卡,剩余 4 分 32 秒',
+    );
+  });
+
+  it('falls back to "撤销任务打卡" when taskTitle is whitespace only', () => {
+    // 防御 — 消费方传 '   '(理论上 validation 已就剔除)→ fallback 不变
+    expect(buildUndoChipA11yLabel(baseLabel, '   ')).toBe(
+      '撤销任务打卡,剩余 4 分 32 秒',
+    );
+  });
+
+  it('preserves expired-window a11y label verbatim (defensive — never rendered)', () => {
+    // canUndo=false → chip 不渲染 → a11yLabel = '撤销窗口已过期'。本函数
+    // 防御性透传(让任何 caller 都不会意外换成 expires 形态)
+    expect(buildUndoChipA11yLabel('撤销窗口已过期', '喂奶粉')).toBe('撤销窗口已过期');
+  });
+
+  it('taskTitle prop is optional on UndoChipProps (forward-compat with old callers)', () => {
+    // 验证 UndoChipProps.taskTitle 可选 — 现有消费方(HomeScreen / TaskDetailScreen)
+    // 不传 taskTitle 也合法(后续 batch 加透传 task.title,旧 callsite 兼容)
+    const propsWithoutTitle: UndoChipProps = {
+      task: makeTask(),
+      onUndo: jest.fn(),
+    };
+    expect(propsWithoutTitle.taskTitle).toBeUndefined();
+
+    // 验证传 taskTitle 也合法
+    const propsWithTitle: UndoChipProps = {
+      task: makeTask(),
+      taskTitle: '喂奶粉',
+      onUndo: jest.fn(),
+    };
+    expect(propsWithTitle.taskTitle).toBe('喂奶粉');
+  });
+
+  it('handles long task titles without breaking a11y label', () => {
+    // 边界:超长 task title(20 字)— 不引入截断/破坏
+    const longTitle = '买一周的菜包括土豆胡萝卜西红柿';
+    expect(buildUndoChipA11yLabel(baseLabel, longTitle)).toBe(
+      `撤销${longTitle},剩余 4 分 32 秒`,
+    );
   });
 });
 
