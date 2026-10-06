@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
-import { useFonts } from 'expo-font';
-import { SplashScreen as ExpoSplashScreen, Stack, Redirect, useRouter, usePathname } from 'expo-router';
+import * as Font from 'expo-font';
+import { Stack, Redirect, useRouter, usePathname } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { TamaguiProvider, Theme } from 'tamagui';
 
@@ -35,63 +35,30 @@ import NotoSansSCMedium from '../assets/fonts/NotoSansSC-Medium.ttf';
 import NotoSansSCSemibold from '../assets/fonts/NotoSansSC-Semibold.ttf';
 
 // Android 8+ 上 system font fallback 链(design-v1.0 §1.2)
-// useFonts 加载失败时 Tamagui 仍能渲染,只是字重 fallback
-ExpoSplashScreen.preventAutoHideAsync();
+// 字体加载失败时 Tamagui 仍能渲染,只是字重 fallback
 
 export default function RootLayout() {
-  // expo-font 加载自打包 TTF
-  // 字体名称必须与 src/theme/tamagui.config.ts createFont.face 中一致
-  const [fontsLoaded, fontError] = useFonts({
-    NotoSansSC_Regular: NotoSansSCRegular,
-    NotoSansSC_Medium: NotoSansSCMedium,
-    NotoSansSC_Semibold: NotoSansSCSemibold,
-  });
-
-  // T-FIX-BUNDLE-9:字体一旦加载完成,标记 sticky,后续即使 fontsLoaded 短暂 false 也不 return null。
-  // 之前 `if (!fontsLoaded && !fontError) return null` 在字体反复 reload 时让 root layout
-  // 反复 unmount + remount → 整个子树(AuthProvider/FamilyProvider/Gate)反复重建 →
-  // subscribeAuthState 反复注册 → SDK 反复 emit INITIAL_SESSION → AuthContext.initialize()
-  // 反复跑 bootGuard → signInAnonymously 反复触发 → session 反复 null ↔ signed → splash 闪。
-  // sticky flag 一旦置 true 永不复位,保证子树永不被卸载。
-  const [, forceRender] = useState(0);
-  const fontsEverLoadedRef = useRef(false);
+  // T-FIX-BUNDLE-11:彻底摆脱 expo-splash-screen + useFonts React hook。
+  // 真机验证多次(BUNDLE-8/9/10):
+  //   - BUNDLE-8: Gate 加 minimum duration + 诊断 log — 闪未修
+  //   - BUNDLE-9: sticky flag 防 fontsLoaded 短暂 false — UNMOUNTED → mounted 反复仍出现
+  //   - BUNDLE-10: 完全移除 return null — UNMOUNTED → mounted 不再出现,但 splash 仍闪
+  // 推断根因 = expo-splash-screen 的 preventAutoHideAsync/hideAsync 在 Expo Go SDK 53+
+  //   有 bug,触发 root layout 卸载重建(即使我们移除了 return null 也闪)
+  // 修法: 完全不再触碰 expo-splash-screen native module,字体改用 imperative Font.loadAsync
+  //   在 useEffect 内异步加载,不阻塞 React tree。Native splash 让 expo-router 自身处理
+  //   (expo-router 在 expo default 下会自动 hide native splash,无需我们干预)。
+  // 副作用:字体加载期间(<1 秒)Tamagui 渲染用 system font fallback,加载完后立刻切换。
   useEffect(() => {
-    if (fontsLoaded || fontError) {
-      fontsEverLoadedRef.current = true;
-      // 触发 re-render 让 if 条件重新求值(ref 改不触发,需要 force state)
-      forceRender((n) => n + 1);
-    }
-  }, [fontsLoaded, fontError]);
-
-  // T-FIX-BUNDLE-9:Root layout mount log — 验证是否真的反复 unmount。
-  // eslint-disable-next-line no-console
-  useEffect(() => {
-    console.log('[RootLayout] mounted');
-    return () => {
-      console.log('[RootLayout] UNMOUNTED');
-    };
-  }, []);
-
-  useEffect(() => {
-    if (fontError) {
-      // 字体加载失败不阻塞 — 退到系统字体(PingFang SC / Noto Sans CJK)
-      // 真实失败原因(文件损坏 / OOM)会在这里 console.error 出来
+    void Font.loadAsync({
+      NotoSansSC_Regular: NotoSansSCRegular,
+      NotoSansSC_Medium: NotoSansSCMedium,
+      NotoSansSC_Semibold: NotoSansSCSemibold,
+    }).catch((err) => {
       // eslint-disable-next-line no-console
-      console.error('[FamSchedule] Font load error:', fontError);
-    }
-    if (fontsLoaded || fontError) {
-      ExpoSplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
-
-  // T-FIX-BUNDLE-10:**完全移除** return null 守卫。
-  // 真机验证 BUNDLE-9 sticky flag 仍不够 — UNMOUNTED → mounted 反复出现,
-  //   说明 useFonts 在 RN 0.86 + Expo SDK 57 + Expo Go 上有更深的 bug,
-  //   让 fontsLoaded 反复抖动,即使 sticky flag 也不能完全保住子树。
-  // 修法:不再因为 fontsLoaded 阻塞渲染。让 Tamagui 始终渲染(字体未加载时
-  //   Tamagui 内部 fallback 到 system font),保证根 layout 永不被卸载。
-  // useFonts / fontsEverLoadedRef 仍保留供日后排查用。
-  // 副作用:字体未加载时用户看到 fallback 字体(<1 秒) — 比 splash 闪烁好得多。
+      console.warn('[FamSchedule] Font load error:', err);
+    });
+  }, []);
 
   return (
     <TamaguiProvider config={config} defaultTheme="light">
