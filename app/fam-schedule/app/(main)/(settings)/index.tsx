@@ -1,6 +1,6 @@
 import { Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { YStack, XStack, Text, Separator } from 'tamagui';
+import { YStack, XStack, Text, Separator, useTheme } from 'tamagui';
 import { CaretRight } from 'phosphor-react-native';
 
 /**
@@ -48,6 +48,12 @@ interface SettingsItem {
 }
 
 function SettingsSection({ items }: { items: SettingsItem[] }): React.JSX.Element {
+  // T-FIX-06-B M03:CaretRight 是 phosphor 组件,color prop 接受 hex string(不像 Tamagui 组件
+  // 可直接传 `$textTertiary` token)。这里走 Batch A M24 模式:useTheme() 拿当前主题下的
+  // $textTertiary.val → 喂给 phosphor color,跨 light/dark 自动适配。
+  const theme = useTheme();
+  const textTertiary = (theme.textTertiary?.val ?? '#A89B86') as string;
+
   return (
     <YStack
       gap="$xs"
@@ -76,7 +82,7 @@ function SettingsSection({ items }: { items: SettingsItem[] }): React.JSX.Elemen
                   {it.caption}
                 </Text>
               </YStack>
-              <CaretRight size={18} color="#A89B86" weight="regular" />
+              <CaretRight size={18} color={textTertiary} weight="regular" />
             </XStack>
           </Link>
           {idx < items.length - 1 ? <Separator borderColor="$border" /> : null}
