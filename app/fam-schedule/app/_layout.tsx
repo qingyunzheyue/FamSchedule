@@ -264,8 +264,15 @@ function Gate() {
     );
   }
 
-  // 没家庭 → 强制 onboarding
-  if (family.state.status === 'no_family') {
+  // T-FIX-BUNDLE-14:family.loading + family.no_family 都走 onboarding Redirect。
+  // 真机验证 BUNDLE-13 后,splash 不闪了但主页面闪烁 — 因为 Gate 在 family.loading 时
+  //   走最后一条 `return <Stack/>`,expo router 自动 navigate 到默认 pathname `/`,用户被切到
+  //   home tab。family.no_family 立即触发 Redirect 到 `/pair-create`。family.status 在
+  //   loading ↔ no_family 之间反复 → pathname 在 `/` ↔ `/pair-create` 之间反复 → 主页闪屏。
+  // 合并两个分支到 onboarding:无论 family 拉没拉到数据,只要不是 in_family,都引导到
+  //   /pair-create。family.loading 在 onboarding 期间由 Gateway 自行收敛(setState loading →
+  //   no_family),不进 home tab 闪烁。
+  if (family.state.status === 'loading' || family.state.status === 'no_family') {
     return <Redirect href="/(onboarding)/pair-create" />;
   }
 
