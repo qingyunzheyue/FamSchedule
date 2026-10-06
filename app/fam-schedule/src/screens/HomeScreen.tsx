@@ -370,8 +370,12 @@ export function HomeScreen(): React.JSX.Element {
   const { count: expiredCount, loading: expiredLoading } = useExpiredTaskCount(today);
 
   // 开发期占位 log:T-US015-2 接 banner 后删除此 console.log
+  // T-FIX-BUNDLE-6:仅在 count > 0 或 dev mode 之外不刷屏(spam 排查反馈:
+  //   之前每次 render 都打,真机 dev server log 被刷屏,掩盖了真错误)。
   // eslint-disable-next-line no-console
-  console.log('[HomeScreen] expired tasks count:', expiredCount, 'loading:', expiredLoading);
+  if (expiredCount > 0) {
+    console.log('[HomeScreen] expired tasks count:', expiredCount, 'loading:', expiredLoading);
+  }
 
   // ---- 下拉刷新 ----
 

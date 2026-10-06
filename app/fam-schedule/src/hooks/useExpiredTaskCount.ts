@@ -116,10 +116,16 @@ export function useExpiredTaskCount(today: string): ExpiredTaskCountState {
     };
     // deps 拆解说明:
     //   - family?.family.id:family 上下文变化(loading → in_family / 切换 family)
-    //   - tasks:Realtime 推送 / pullSince → useTasks 触发新引用
+    //   - tasksLength:Realtime 推送 / pullSince → tasks array 长度变化(任务新增 / 删除)
+    //     用 length 而非 tasks 引用,因为 useSyncExternalStore 的 getSnapshot 在父 re-render
+    //     chain 下可能返回新 array(任务内容未变但 ref 新)→ 反复触发 effect → setLoading
+    //     spam + console.log spam(T-US015-1 真机验证反馈)
     //   - today:跨日 / caller 重算时变化
     // 故意忽略 family 对象引用(每次 render 引用都变),用 .family.id 字符串稳定
-  }, [family?.family.id, tasks, today]);
+    // 故意忽略 task 内容(completed_at 变):过期 banner 不需响应 checkin 状态变化,
+    //   task 完成的语义是"不再过期",filterExpiredTasks 自然过滤 completed 任务,
+    //   下次 tasksLength 变化时也会重算
+  }, [family?.family.id, tasks.length, today]);
 
   return { count, loading };
 }
