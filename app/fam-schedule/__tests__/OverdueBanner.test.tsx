@@ -21,7 +21,10 @@
  */
 
 import type { OverdueBannerProps } from '../src/components/OverdueBanner';
-import { OverdueBanner } from '../src/components/OverdueBanner';
+import {
+  OverdueBanner,
+  buildOverdueBannerA11yLabel,
+} from '../src/components/OverdueBanner';
 
 // ---- Mocks (避免 RN + phosphor 触发 SVG / DevMenu 查找 invariant) ----
 
@@ -179,6 +182,49 @@ describe('OverdueBanner — a11y label & testID contracts', () => {
     expect(expectedA11yLabel).toBe('已过期 14 小时,点击补卡');
     expect(expectedA11yLabel).toContain('已过期');
     expect(expectedA11yLabel).toContain('补卡');
+  });
+
+  it('T-FIX-06-B M19: short messages (≤ 30 chars) are not truncated', () => {
+    // 边界 — 短 message(刚刚过期、已过期 14 小时、已过期 22 小时)不截断
+    expect(buildOverdueBannerA11yLabel('刚刚过期')).toBe('刚刚过期,点击补卡');
+    expect(buildOverdueBannerA11yLabel('已过期 14 小时')).toBe('已过期 14 小时,点击补卡');
+    expect(buildOverdueBannerA11yLabel('已过期 22 小时')).toBe('已过期 22 小时,点击补卡');
+    expect(buildOverdueBannerA11yLabel('已过期 3 天')).toBe('已过期 3 天,点击补卡');
+  });
+
+  it('T-FIX-06-B M19: long messages (> 30 chars) are truncated with ellipsis + tail 补卡', () => {
+    // 边界 — 长 message(异常场景:超 30 天过期 / 自定义过长文案)截断到 30 + '...' + ',点击补卡'
+    // "已过期 999 天这是非常长的过期文案以验证字符串截断 bug" = 30+ chars
+    const longMsg = '已过期 999 天这是非常长的过期文案以验证字符串截断 bug';
+    expect(longMsg.length).toBeGreaterThan(30);
+
+    const label = buildOverdueBannerA11yLabel(longMsg);
+    expect(label.endsWith(',点击补卡')).toBe(true);
+    expect(label).toContain('...');
+    // 截断后 length 不应超过原 message 的 1/2 也不算多
+    expect(label.length).toBeLessThan(longMsg.length + 10);
+  });
+
+  it('T-FIX-06-B M19: "点击补卡" tail 始终保留(不依赖 message 截断点)', () => {
+    // 边界 — 任何 message 长度下 ",点击补卡" 必须 tail
+    const samples = [
+      '刚刚过期',
+      '已过期 14 小时',
+      '已过期 22 小时',
+      '已过期 3 天',
+      '已过期 999 天这是非常长的过期文案以验证字符串截断 bug',
+    ];
+    for (const m of samples) {
+      const label = buildOverdueBannerA11yLabel(m);
+      expect(label.endsWith(',点击补卡')).toBe(true);
+      expect(label).toContain('补卡');
+    }
+  });
+
+  it('T-FIX-06-B M19: trims whitespace before processing (defensive)', () => {
+    // 防御 — message 前后空白应先 trim,避免 "  已过期 14 小时  ,点击补卡" 这种形态
+    expect(buildOverdueBannerA11yLabel('  已过期 14 小时  ')).toBe('已过期 14 小时,点击补卡');
+    expect(buildOverdueBannerA11yLabel('已过期 14 小时')).toBe('已过期 14 小时,点击补卡');
   });
 
   it('accessibilityRole is "alert" (immediate announcement for screen readers)', () => {

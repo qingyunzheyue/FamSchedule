@@ -117,8 +117,13 @@ function OverdueBannerImpl({
   // ---------------------------------------------------------------------
   // a11y label(综合文案 + 补卡动作)
   // ---------------------------------------------------------------------
-
-  const a11yLabel = `${message},点击补卡`;
+  //
+  // T-FIX-06-B M19 升级:长 message(如"已过期 999 天")被截断到 30 字符以避免
+  // 屏幕阅读器朗读过长;截断后 "点击补卡" 始终 tail(动作动词不可省 — 让用户知道
+  // 这是个可交互 banner 而非纯展示)。
+  //   - 长 message(message.length > 30)→ "已过期 999..." + ",点击补卡"
+  //   - 短 message(≤ 30)→ 原文 + ",点击补卡"
+  const a11yLabel = buildOverdueBannerA11yLabel(message);
 
   // ---------------------------------------------------------------------
   // Render
@@ -171,6 +176,33 @@ function OverdueBannerImpl({
  * 父层 TaskDetailScreen 通常 useCallback + useMemo(message) → 引用稳定。
  */
 export const OverdueBanner = memo(OverdueBannerImpl);
+
+/**
+ * 构造 OverdueBanner 的 a11y label — T-FIX-06-B M19 升级。
+ *
+ * 设计动机:
+ *   - 原版 `${message},点击补卡`:长 message(如"已过期 999 天"或长自定义文案)直
+ *     接传给屏幕阅读器,朗读时间长,用户体验差。
+ *   - 升级:message 超过 `MAX_MESSAGE_CHARS`(30)时截断到 30 字符 + 省略号,
+ *     "点击补卡" 始终 tail(动作动词不可省 — 让用户知道这是可交互 banner)。
+ *   - 边界:message 长度 ≤ 30 → 不截断,直接拼 ",点击补卡"。
+ *
+ * 抽到 module-level 纯函数便于 jest 直接断言字符串契约。
+ *
+ * @param message — 由 formatOverdueHours 派生的过期文案
+ * @returns 完整 a11y label
+ */
+export function buildOverdueBannerA11yLabel(message: string): string {
+  const TAIL = ',点击补卡';
+  const MAX_MESSAGE_CHARS = 30;
+  const trimmed = message.trim();
+  if (trimmed.length <= MAX_MESSAGE_CHARS) {
+    return `${trimmed}${TAIL}`;
+  }
+  // 截断:保留前 MAX_MESSAGE_CHARS 字符 + '...'(省略号让用户知道截了)
+  // 防御:截断点可能在 surrogate pair 中间(中文 BMP 内 safe,不影响常见文案)
+  return `${trimmed.slice(0, MAX_MESSAGE_CHARS)}...${TAIL}`;
+}
 
 // =====================================================================
 // 4. Styles
