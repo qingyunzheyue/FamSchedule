@@ -119,7 +119,9 @@ const UNDO_FAILED_TITLE = '撤销失败';
 const UNDO_FAILED_OK_LABEL = '好';
 
 /** T-US005-2 列表打卡 — 配偶先完成提示按钮 label */
-const SPOUSE_COMPLETED_OK_LABEL = '好';
+const SPOUSE_COMPLETED_OK_LABEL = '知道了';
+/** T-FIX-06-B M10:showConfirmDialog 次按钮(dismiss)label */
+const SPOUSE_COMPLETED_DISMISS_LABEL = '关闭';
 
 /** T-US003-2 列表 long-press 删除文案 */
 const LONGPRESS_DELETED_TITLE = '已删除';
@@ -342,7 +344,10 @@ export function HomeScreen(): React.JSX.Element {
   //   - CheckInService.checkin 在 T-US005-2 后返回 3 种 status:
   //     a) 'checked_in'        — 我先完成(成功)— UI 乐观切到 completed 态,
   //                              跨组件一致地不弹 toast(简洁);Realtime 推送兜底
-  //     b) 'spouse_completed'  — 配偶先 done(0 行 RPC)— Alert "配偶已先一步完成"
+  //     b) 'spouse_completed'  — 配偶先 done(0 行 RPC)— T-FIX-06-B M10 升级:
+  //                              走 showConfirmDialog(单确认按钮 OK),对齐"spouse 提示"
+  //                              而不是通用失败 Alert。showConfirmDialog 由 T-US003-2
+  //                              review 引入,统一二次确认入口。
   //     c) 'failed'            — pre-check 失败 — Alert "打卡失败" + 翻译 reason
   //   - 留后续:
   //     - 5 分钟内撤销入口(T-US005-3)— CheckInButton completed 态点击目前 noop
@@ -353,9 +358,22 @@ export function HomeScreen(): React.JSX.Element {
       // checked_in:乐观 UI 自然切换,不弹 toast(简洁)
       if (result.status === 'spouse_completed') {
         const msg = mapCheckInResultToToast(result, task.title);
-        Alert.alert(msg.title, msg.body, [
-          { text: SPOUSE_COMPLETED_OK_LABEL, style: 'default' },
-        ]);
+        // T-FIX-06-B M10:spouse 提示升级 — showConfirmDialog 走"确认 + 取消"标准接口,
+        // 对齐其它 confirm dialog 视觉(按钮顺序 / destructive 风格统一)。这里 destructive=false
+        // 因为 spouse_completed 是通知型而非破坏型;cancelLabel 留默认空串触发默认 "关闭" 文案。
+        showConfirmDialog({
+          title: msg.title,
+          message: msg.body,
+          confirmLabel: SPOUSE_COMPLETED_OK_LABEL,
+          cancelLabel: SPOUSE_COMPLETED_DISMISS_LABEL,
+          destructive: false,
+          onConfirm: () => {
+            // 用户确认/关闭 dialog — 无副作用,UI 已显示 spouse_completed 视觉态
+          },
+          onCancel: () => {
+            // 用户按"关闭"或外 dismiss — 同上无副作用
+          },
+        });
       } else if (result.status === 'failed') {
         Alert.alert(
           CHECKIN_FAILED_TITLE,
