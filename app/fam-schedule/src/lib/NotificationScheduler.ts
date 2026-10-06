@@ -124,7 +124,12 @@ const TASK_REMINDER_PREFIX = 'task-reminder:';
 const DIGEST_MORNING = 'digest-morning';
 const DIGEST_EVENING = 'digest-evening';
 
-// 默认"无 task_time 时"的提醒时刻(9:00 AM)— PRD 未规定,选家庭日程常用值
+// 默认"无 task_time 时"的提醒时刻(9:00 AM)— PRD 未规定,选家庭日程常用值。
+// 模块-scope 常量(export 给 parseHHMM 兜底 + computeTaskReminderDate fallback):
+//   - DEFAULT_REMINDER_HOUR = 9   — 9 AM,家庭常用值(早餐 / 出门前 / 上午待办提醒窗口)
+//   - DEFAULT_REMINDER_MINUTE = 0 — 整点
+// 改名 / 改值会同时影响 3 处派生(parseHHMM fallback + computeTaskReminderDate fallback +
+// scheduleDigest 非法时间兜底),所以集中定义 + 注释清楚。
 const DEFAULT_REMINDER_HOUR = 9;
 const DEFAULT_REMINDER_MINUTE = 0;
 
@@ -351,8 +356,25 @@ function computeTaskReminderDate(task: Task): Date {
 }
 
 /**
- * 解析 "HH:MM" 或 "HH:MM:SS" 字符串为 [hour, minute]。
- * 失败回退到 [9, 0](防御性)。
+ * 解析 "HH:MM" 或 "HH:MM:SS" 字符串为 [hour, minute] 元组。
+ *
+ * 输入约定(与 DB family_settings 的 TIME 列 / DB task_time 列对齐):
+ *   - "HH:MM"     — 24h 小时 + 分钟("08:00" / "20:30")
+ *   - "HH:MM:SS"  — 同上,带秒("08:00:00" / "20:30:45")— 秒段被忽略(只用 h:m)
+ *
+ * 解析失败回退(防御性):
+ *   - 任一段非数字(`NaN`)→ 返回 `[DEFAULT_REMINDER_HOUR, DEFAULT_REMINDER_MINUTE]`
+ *     即 `[9, 0]`(模块顶部常量,见上)。这是因为 scheduleDigest 拿到非法时间字符串
+ *     时不能让 RN SchedulableTrigger DAILY 报错(OS 期望合法 0-23 / 0-59),
+ *     兜底用家庭常用提醒时刻 9:00 AM。
+ *
+ * 边界:
+ *   - 越界值(h > 23 / m > 59)**不**做 normalize — 交给 OS 排程时报错,触发
+ *     rescheduleAll 的 warn 日志;不在客户端静默 mutate(避免掩盖 schema bug)。
+ *   - 空字符串 → split 长度 < 2 → parseInt NaN → 走 fallback。
+ *
+ * @param s — "HH:MM[:SS]" 形态的本地时间字符串
+ * @returns `[hour, minute]` 整型元组(0-23 / 0-59)
  */
 function parseHHMM(s: string): [number, number] {
   const parts = s.split(':');
