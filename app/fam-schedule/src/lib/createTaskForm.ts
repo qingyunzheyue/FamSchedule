@@ -608,13 +608,17 @@ export function mapDeleteFailureReason(reason: DeleteTaskFailureReason): string 
  * 与 mapDeleteFailureReason 同模式(任务 brief §B 错误文案集中映射),
  * UI 层(HomeScreen / TaskDetailScreen)直接 Alert.alert(翻译结果)。
  *
- * 文案(任务 brief §A-6 明确 + 设计 task-detail-v1.0 §6):
- *   - not_authenticated   → "请先登录"
- *   - no_family          → "你还没加入家庭"
- *   - task_not_found     → "任务不存在或已被删除"
- *   - cancelled          → "任务已取消,无法打卡"
- *   - rls_denied         → "没有打卡权限"
- *   - unknown            → "打卡失败,请重试"
+ * 文案(任务 brief §A-6 明确 + 设计 task-detail-v1.0 §6 + T-FIX-06-B M14 polish):
+ *   - not_authenticated   → "请先登录后再试"
+ *   - no_family           → "请先加入家庭后再打卡"
+ *   - task_not_found      → "任务不存在或已被删除"
+ *   - cancelled           → "任务已取消,无法打卡"
+ *   - rls_denied          → "没有打卡权限,请联系配偶"
+ *   - unknown             → "打卡失败,请重试"
+ *
+ * T-FIX-06-B M14 升级理由:原短句版("请先登录" / "你还没加入家庭" / "没有打卡权限")
+ * 在 Alert 弹窗内读起来像半截句(用户读到一半才意识到"然后呢")。升级后每条都补完
+ * "后续可执行动作"或 "然后呢" 的语义,让 Alert 文案读起来完整。
  *
  * 设计动机:
  *   - 集中文案便于后续 i18n(react-i18next)— 所有失败 reason 都集中本模块常量 + 本函数
@@ -623,15 +627,15 @@ export function mapDeleteFailureReason(reason: DeleteTaskFailureReason): string 
 export function mapCheckInFailureReason(reason: CheckInFailureReason): string {
   switch (reason) {
     case 'not_authenticated':
-      return '请先登录';
+      return '请先登录后再试';
     case 'no_family':
-      return '你还没加入家庭';
+      return '请先加入家庭后再打卡';
     case 'task_not_found':
       return '任务不存在或已被删除';
     case 'cancelled':
       return '任务已取消,无法打卡';
     case 'rls_denied':
-      return '没有打卡权限';
+      return '没有打卡权限,请联系配偶';
     case 'unknown':
       return '打卡失败,请重试';
   }

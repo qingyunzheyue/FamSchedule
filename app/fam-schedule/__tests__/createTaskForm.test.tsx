@@ -93,12 +93,12 @@ describe('createTaskForm.mapDeleteFailureReason', () => {
 //   - 全部 reason 都 produce 非空中文(防御 / 默认值兜底)
 
 describe('createTaskForm.mapCheckInFailureReason', () => {
-  it('translates "not_authenticated" to "请先登录"', () => {
-    expect(mapCheckInFailureReason('not_authenticated')).toBe('请先登录');
+  it('translates "not_authenticated" to "请先登录后再试" (T-FIX-06-B M14 句子收尾补全)', () => {
+    expect(mapCheckInFailureReason('not_authenticated')).toBe('请先登录后再试');
   });
 
-  it('translates "no_family" to "你还没加入家庭"', () => {
-    expect(mapCheckInFailureReason('no_family')).toBe('你还没加入家庭');
+  it('translates "no_family" to "请先加入家庭后再打卡" (T-FIX-06-B M14 句子收尾补全)', () => {
+    expect(mapCheckInFailureReason('no_family')).toBe('请先加入家庭后再打卡');
   });
 
   it('translates "task_not_found" to "任务不存在或已被删除"', () => {
@@ -109,8 +109,8 @@ describe('createTaskForm.mapCheckInFailureReason', () => {
     expect(mapCheckInFailureReason('cancelled')).toBe('任务已取消,无法打卡');
   });
 
-  it('translates "rls_denied" to "没有打卡权限"', () => {
-    expect(mapCheckInFailureReason('rls_denied')).toBe('没有打卡权限');
+  it('translates "rls_denied" to "没有打卡权限,请联系配偶" (T-FIX-06-B M14 句子收尾补全)', () => {
+    expect(mapCheckInFailureReason('rls_denied')).toBe('没有打卡权限,请联系配偶');
   });
 
   it('translates "unknown" to generic retry hint "打卡失败,请重试"', () => {
@@ -140,6 +140,30 @@ describe('createTaskForm.mapCheckInFailureReason', () => {
     // 复用一条文案(虽然两者 reason key 命名空间不冲突 — 这是 UX 守卫而非 TS 守卫)。
     expect(mapCheckInFailureReason('cancelled')).toContain('取消');
     expect(mapCheckInFailureReason('cancelled')).toContain('打卡');
+  });
+
+  it('T-FIX-06-B M14:all 6 reasons end with a complete thought (no half-sentences)', () => {
+    // 防御:M14 polish 后每条 reason 文案都是完整中文短语,不出现"请先登录" 短句单独结尾。
+    // 短句版(not_authno='请先登录', no_family='你还没加入家庭', rls_denied='没有打卡权限')
+    // 在 Alert 弹窗中读起来像"然后呢?"。M14 后每条都补完后半句:
+    //   - not_authenticated → '请先登录后再试'
+    //   - no_family         → '请先加入家庭后再打卡'
+    //   - rls_denied        → '没有打卡权限,请联系配偶'
+    const reasons = [
+      'not_authenticated',
+      'no_family',
+      'task_not_found',
+      'cancelled',
+      'rls_denied',
+      'unknown',
+    ] as const;
+    for (const r of reasons) {
+      const msg = mapCheckInFailureReason(r);
+      // 防御:不能等于 6 字符以下的短句(疑似 polish 漏改)
+      expect(msg.length).toBeGreaterThanOrEqual(6);
+      // 防御:不能以单个标点结尾
+      expect(msg).not.toMatch(/[,.。;；]$/);
+    }
   });
 });
 
@@ -223,7 +247,8 @@ describe('createTaskForm.mapCheckInResultToToast — T-US005-2', () => {
     expect(toast.variant).toBe('error');
     expect(toast.title).toBe('打卡失败');
     // body 直接复用 mapCheckInFailureReason(reason) — 文案一致性
-    expect(toast.body).toBe('你还没加入家庭');
+    // T-FIX-06-B M14:no_family 文案升级为 '请先加入家庭后再打卡'
+    expect(toast.body).toBe('请先加入家庭后再打卡');
     // 防御:失败 toast 不应包含 task title(失败时无业务上下文)
     expect(toast.body).not.toContain(TASK_TITLE);
   });
