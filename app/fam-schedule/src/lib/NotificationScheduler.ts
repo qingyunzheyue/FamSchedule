@@ -22,6 +22,13 @@
  *     已知缺陷(后台被杀、不跨设备等)显式记录在 ADR-006 中。
  *   - ADR-007: 早/晚汇总时间从 family_settings 读(默认 08:00 / 20:00)。
  *
+ * T-FIX-BUNDLE-4:Expo Go SDK 53+ 移除了 expo-notifications 的 module load。
+ *   旧 static `import * as Notifications from 'expo-notifications'` 在 module load 时
+ *   直接 throw(不论函数是否调用),Expo Go 用户即使跳过函数调用也报错。
+ *   改 lazy require + try/catch + isExpoGo guard:Expo Go 不触发 module load,
+ *   函数层 no-op 让 app 正常运行(只是不响通知)。dev build / production / standalone
+ *   走真 require,功能完全保留。
+ *
  * ⚠️ HIGH RISK 模块(任务 DoD 标红):
  *   1. Android 12+ Exact Alarm 权限(`SCHEDULE_EXACT_ALARM` 已声明在 manifest):
  *      用户需在"系统设置 → 应用 → 特殊访问 → 闹钟和提醒"手动授权;
@@ -52,14 +59,62 @@
  *   - `_resetForTests`:jest 测试间重置(不暴露给业务)
  */
 
-import * as Notifications from 'expo-notifications';
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
+import type { EventSubscription } from 'expo-modules-core';
 
 import type { Database } from '../types/database';
 
 type Task = Database['public']['Tables']['tasks']['Row'];
 type FamilySettings = Database['public']['Tables']['family_settings']['Row'];
+
+// ---- T-FIX-BUNDLE-4:Expo Go guard + lazy require --------------------------
+//
+// Expo Go SDK 53+ 移除了 expo-notifications(在 module load 时直接抛错)。
+// 旧 static `import * as Notifications from 'expo-notifications'` 在模块加载阶段
+// 就 throw,无论后续函数是否调用 —— 所以仅靠 `_layout.tsx` 用 `isExpoGo` 跳过函数
+// 调用是不够的,只要 import 这行存在,Expo Go 启动就会崩。
+//
+// 修复策略:
+//   1. `expo-constants` 用 lazy require + try/catch(原任务 spec 写 `import Constants`,
+//      但 jest-expo 不自动 mock expo-constants,真实模块在 jest 环境 throw,
+//      故也改成 lazy require —— expo-constants 在 Expo Go / dev build / production
+//      都能正常 load,只在测试环境 fall-through)。
+//   2. `isExpoGo = Constants.executionEnvironment === 'storeClient'`:
+//      - Expo Go:true → 完全跳过 `require('expo-notifications')`
+//      - 其他环境:false → 进入 try/catch require
+//   3. try/catch 兜底:非 Expo Go 但 require 也可能 throw(dev build 没装 native module),
+//      保证 app 不崩,`_Notifications` 保持 null,函数层 no-op。
+//   4. 函数层每个 export 函数入口 check `_Notifications` 非 null 才执行,
+//      否则 no-op 让 app 正常运行(只是不响通知)。
+//
+// dev build / production / standalone:expo-notifications 正常工作。
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _Constants: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('expo-constants');
+  // expo-constants 既支持 default export 也支持 namespace export
+  _Constants = (mod && (mod.default ?? mod)) || null;
+} catch {
+  // expo-constants 不可用(罕见 — 当前仅 jest 测试环境会触发)→ 视为非 Expo Go
+  _Constants = null;
+}
+
+const isExpoGo = _Constants?.executionEnvironment === 'storeClient';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _Notifications: any = null;
+if (!isExpoGo) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _Notifications = require('expo-notifications');
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn('[NotificationScheduler] expo-notifications unavailable:', msg);
+  }
+}
 
 // ---- ID encoding -----------------------------------------------------
 //
@@ -114,15 +169,20 @@ let permissionRequested = false;
  *
  * 幂等:重复调用只跑一次。第二次起直接 return true,不重装任何东西。
  *
+ * T-FIX-BUNDLE-4:Expo Go / require failed → no-op,返回 true(幂等 flag 守住,不再重试)。
+ *
  * @returns true = 初始化完成(注意:**不**代表权限已 granted,权限状态
  *   应由 `requestNotificationPermission()` 返回值决定)。
  */
 export async function init(): Promise<boolean> {
   if (initialized) return true;
   initialized = true;
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return true;
+  if (!_Notifications) return true;
 
   // Set handler — 决定应用在前台时通知如何呈现
-  Notifications.setNotificationHandler({
+  _Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
       shouldShowList: true,
@@ -134,10 +194,10 @@ export async function init(): Promise<boolean> {
   // Android: 配 channel
   if (Platform.OS === 'android') {
     // task-reminders: 高优先级,heads-up + 振动 + 赤陶 LED(品牌色)
-    await Notifications.setNotificationChannelAsync('task-reminders', {
+    await _Notifications.setNotificationChannelAsync('task-reminders', {
       name: '任务提醒',
       description: '到点任务提醒',
-      importance: Notifications.AndroidImportance.HIGH,
+      importance: _Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#DC5A24', // 赤陶,DD-002 色板
       sound: 'default',
@@ -145,10 +205,10 @@ export async function init(): Promise<boolean> {
       showBadge: false,
     });
     // digest: 默认优先级(早/晚汇总是低紧迫度信息)
-    await Notifications.setNotificationChannelAsync('digest', {
+    await _Notifications.setNotificationChannelAsync('digest', {
       name: '家庭汇总',
       description: '每日早 / 晚任务汇总',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: _Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250],
       sound: 'default',
       enableVibrate: true,
@@ -157,7 +217,11 @@ export async function init(): Promise<boolean> {
   }
 
   // Tap listener(前台 / 后台已运行)
-  Notifications.addNotificationResponseReceivedListener((response) => {
+  _Notifications.addNotificationResponseReceivedListener((response: {
+    notification: {
+      request: { content: { data: unknown } };
+    };
+  }) => {
     const data = response.notification.request.content.data as
       | { taskId?: string }
       | undefined;
@@ -166,7 +230,7 @@ export async function init(): Promise<boolean> {
   });
 
   // Cold-start: 应用因通知被启动时,getLastNotificationResponseAsync 仍能拿到
-  const initial = await Notifications.getLastNotificationResponseAsync();
+  const initial = await _Notifications.getLastNotificationResponseAsync();
   if (initial) {
     const data = initial.notification.request.content.data as
       | { taskId?: string }
@@ -190,16 +254,22 @@ export async function init(): Promise<boolean> {
  * 幂等:模块级 `permissionRequested` flag 守护,只弹一次。
  * 用户拒后再调不会重弹(OS 限制 —— 重弹需引导用户去系统设置)。
  *
+ * T-FIX-BUNDLE-4:Expo Go 上 no-op,返回 true(幂等 flag 守住,不重复进入 gated 路径)。
+ * `_layout.tsx` 已经提前用 isExpoGo 跳过调用,这里是防御性兜底。
+ *
  * @returns true = 权限 granted,可继续排程;false = 权限被拒或 OS 拒绝。
  */
 export async function requestNotificationPermission(): Promise<boolean> {
   if (permissionRequested) return true;
   permissionRequested = true;
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return true;
+  if (!_Notifications) return true;
 
   // iOS + Android 13+:走原生权限申请
   // Android < 13:channel 已在 init() 注册,requestPermissionsAsync 在这种 OS 上
   // 通常直接返回 granted,这里统一兜底
-  const { status } = await Notifications.requestPermissionsAsync({
+  const { status } = await _Notifications.requestPermissionsAsync({
     ios: { allowAlert: true, allowBadge: false, allowSound: true },
     android: {},
   });
@@ -220,7 +290,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
  *
  * 返回:
  *   - 排程 identifier(`task-reminder:<task_id>`)— 用于后续取消
- *   - null:任务已完成 / 提醒时间已过 / init 失败 — 不排程
+ *   - null:任务已完成 / 提醒时间已过 / Expo Go / require 失败 — 不排程
  *
  * ⚠️ 契约:已完成的任务不会自动取消已存在的 reminder。
  *   调用方(checkin 流程)需显式调 `cancelByTaskId(task.id)`。
@@ -228,19 +298,24 @@ export async function requestNotificationPermission(): Promise<boolean> {
  *   早返回路径不 cancel 以避免误删未来时刻。
  */
 export async function scheduleTaskReminder(task: Task): Promise<string | null> {
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return null;
+  if (!_Notifications) return null;
+
   if (task.completed_at) return null;
 
   const triggerDate = computeTaskReminderDate(task);
   if (triggerDate.getTime() <= Date.now()) return null;
 
   const id = `${TASK_REMINDER_PREFIX}${task.id}`;
-  const trigger: Notifications.DateTriggerInput = {
-    type: Notifications.SchedulableTriggerInputTypes.DATE,
+  // T-FIX-BUNDLE-4:原 `Notifications.DateTriggerInput` 类型用 any 替代(runtime check 守住类型契约)
+  const trigger: any = {
+    type: _Notifications.SchedulableTriggerInputTypes.DATE,
     date: triggerDate,
     channelId: 'task-reminders', // Android only — iOS 忽略
   };
 
-  await Notifications.scheduleNotificationAsync({
+  await _Notifications.scheduleNotificationAsync({
     identifier: id,
     content: {
       title: task.title,
@@ -301,14 +376,18 @@ export async function scheduleDigest(
   morningTime: string,
   eveningTime: string,
 ): Promise<void> {
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return;
+  if (!_Notifications) return;
+
   // 先取消旧的 digest(防时间改了后旧版还在响)
-  await Notifications.cancelScheduledNotificationAsync(DIGEST_MORNING).catch(() => undefined);
-  await Notifications.cancelScheduledNotificationAsync(DIGEST_EVENING).catch(() => undefined);
+  await _Notifications.cancelScheduledNotificationAsync(DIGEST_MORNING).catch(() => undefined);
+  await _Notifications.cancelScheduledNotificationAsync(DIGEST_EVENING).catch(() => undefined);
 
   const [morningH, morningM] = parseHHMM(morningTime);
   const [eveningH, eveningM] = parseHHMM(eveningTime);
 
-  await Notifications.scheduleNotificationAsync({
+  await _Notifications.scheduleNotificationAsync({
     identifier: DIGEST_MORNING,
     content: {
       title: '早安 ☀️',
@@ -317,14 +396,14 @@ export async function scheduleDigest(
       sound: 'default',
     },
     trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      type: _Notifications.SchedulableTriggerInputTypes.DAILY,
       hour: morningH,
       minute: morningM,
       channelId: 'digest',
     },
   });
 
-  await Notifications.scheduleNotificationAsync({
+  await _Notifications.scheduleNotificationAsync({
     identifier: DIGEST_EVENING,
     content: {
       title: '晚上好 🌙',
@@ -333,7 +412,7 @@ export async function scheduleDigest(
       sound: 'default',
     },
     trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      type: _Notifications.SchedulableTriggerInputTypes.DAILY,
       hour: eveningH,
       minute: eveningM,
       channelId: 'digest',
@@ -350,8 +429,12 @@ export async function scheduleDigest(
  * 静默吞 cancel 异常(任务可能从未排过 / 已过期被系统清理)。
  */
 export async function cancelByTaskId(taskId: string): Promise<void> {
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return;
+  if (!_Notifications) return;
+
   const id = `${TASK_REMINDER_PREFIX}${taskId}`;
-  await Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined);
+  await _Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined);
 }
 
 // ============================================================
@@ -377,14 +460,18 @@ export async function rescheduleAll(
   tasks: Task[],
   settings: FamilySettings,
 ): Promise<{ taskReminders: number; digests: number }> {
+  // T-FIX-BUNDLE-4:Expo Go / require failed → no-op
+  if (isExpoGo) return { taskReminders: 0, digests: 0 };
+  if (!_Notifications) return { taskReminders: 0, digests: 0 };
+
   // 取消旧的 task-reminder(digest / 其他 ID 不动)
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const scheduled = await _Notifications.getAllScheduledNotificationsAsync();
   const taskReminderIds = scheduled
-    .filter((n) => n.identifier.startsWith(TASK_REMINDER_PREFIX))
-    .map((n) => n.identifier);
+    .filter((n: { identifier: string }) => n.identifier.startsWith(TASK_REMINDER_PREFIX))
+    .map((n: { identifier: string }) => n.identifier);
   await Promise.all(
-    taskReminderIds.map((id) =>
-      Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined),
+    taskReminderIds.map((id: string) =>
+      _Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined),
     ),
   );
 
@@ -417,9 +504,14 @@ export async function _resetForTests(): Promise<void> {
 
 /**
  * 列出当前所有已排程通知 — 供调试菜单 / 设置页 UI 显示用。
+ *
+ * T-FIX-BUNDLE-4:Expo Go / require failed → 返回空数组(类型用 any[] 替代原
+ * Notifications.NotificationRequest[],因为 lazy require 后无法静态引用 expo 类型)。
  */
-export async function listScheduled(): Promise<Notifications.NotificationRequest[]> {
-  return Notifications.getAllScheduledNotificationsAsync();
+export async function listScheduled(): Promise<any[]> {
+  if (isExpoGo) return [];
+  if (!_Notifications) return [];
+  return _Notifications.getAllScheduledNotificationsAsync();
 }
 
 /**
@@ -427,7 +519,9 @@ export async function listScheduled(): Promise<Notifications.NotificationRequest
  * 下划线前缀是约定,业务侧不应调。
  */
 export async function _cancelAllForTests(): Promise<void> {
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  if (isExpoGo) return;
+  if (!_Notifications) return;
+  await _Notifications.cancelAllScheduledNotificationsAsync();
 }
 
 // ============================================================
@@ -442,6 +536,8 @@ export async function _cancelAllForTests(): Promise<void> {
 // 注意:`useNotificationSchedulerInit()` 与 `init()` 是同一层语义 ——
 // 调用方只是利用了 useEffect 生命周期。如果未来要更细粒度控制时机
 // (比如只在真路由 mount 时 init),可以直接调 `init()`,不用走 hook。
+//
+// T-FIX-BUNDLE-4:Expo Go 上 init() 直接 no-op return true,本 hook 不变。
 
 /**
  * 把 eager 阶段的 init 集成到 React 生命周期。
