@@ -1,6 +1,6 @@
 import { Link, Redirect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { YStack, XStack, Text, Button } from 'tamagui';
+import { YStack, XStack, Text, Button, useTheme } from 'tamagui';
 import { UserPlus, House, Crown } from 'phosphor-react-native';
 
 import { useAuth } from '../../../src/contexts/AuthContext';
@@ -48,6 +48,11 @@ export default function FamilyHome(): React.JSX.Element {
   useTasks();
   useSyncManager(family?.family.id ?? null);
 
+  // T-FIX-06-B M02:从 theme token 拿 primary 色,跨 light/dark 自动适配(避免本地 hex
+  // 常量漂移)。theme.primary?.val 是 hex string,phosphor icon color prop 直接接受。
+  const theme = useTheme();
+  const primaryColor = (theme.primary?.val ?? '#DC5A24') as string;
+
   // FamilyContext 还没拿到 family 数据 → 兜底回 onboarding
   // (理论上 Gate 已拦住,但 useFamilyValue 的 null 分支仍要兜住)
   if (!family) {
@@ -69,7 +74,7 @@ export default function FamilyHome(): React.JSX.Element {
         backgroundColor="$background"
       >
         <XStack gap="$sm" alignItems="center">
-          <House size={28} color="#DC5A24" weight="duotone" />
+          <House size={28} color={primaryColor} weight="duotone" />
           <Text
             fontSize="$title"
             fontFamily="$heading"
@@ -147,6 +152,11 @@ function MemberRow({ member, identity, isMe, isCreator }: MemberRowProps): React
   const tagColor = isA ? '$identityA' : '$identityB';
   const displayName = isMe ? '我' : '配偶';
 
+  // T-FIX-06-B M02:Crown icon color 从 theme token 拿 primary 色(MemberRow 也是
+  // function component,useTheme() 在顶层调一次以保证 hook order 稳定)
+  const theme = useTheme();
+  const primaryColor = (theme.primary?.val ?? '#DC5A24') as string;
+
   return (
     <XStack
       gap="$md"
@@ -179,7 +189,7 @@ function MemberRow({ member, identity, isMe, isCreator }: MemberRowProps): React
       <YStack gap="$xs" alignItems="flex-end">
         <XStack gap="$xs" alignItems="center">
           {isCreator ? (
-            <Crown size={12} color="#DC5A24" weight="fill" />
+            <Crown size={12} color={primaryColor} weight="fill" />
           ) : null}
           <Text
             fontSize="$micro"
