@@ -95,9 +95,15 @@ export function getCheckInState(
     return { kind: 'spouse_completed', label: '✓ 配偶已完成' };
   }
 
-  // 3. 待打卡:根据日期区分"补打卡" vs "✓ 打卡"
+  // 3. 待打卡:根据日期区分"✓ 补打卡" vs "✓ 打卡"
+  //
+  // T-FIX-06-B M13:统一 4 状态 visible label 的 emoji 间距(`✓ ` 前缀)。
+  // 之前:'补打卡'(overdue todo)无 emoji 前缀,与 '✓ 已完成 HH:MM' / '✓ 配偶已完成' /
+  // '✓ 打卡' 视觉不齐。统一加 ✓ 前缀(emoji + 1 space + 文本),4/4 状态对齐。
+  // a11y label 仍走 emoji-less 形态(屏幕阅读器对 ✓ 多读为"check"或干脆不读),由
+  // CheckInButton.buildAccessibilityLabel 内部处理。
   if (task.task_date < today) {
-    return { kind: 'todo', label: '补打卡' };
+    return { kind: 'todo', label: '✓ 补打卡' };
   }
   return { kind: 'todo', label: '✓ 打卡' };
 }

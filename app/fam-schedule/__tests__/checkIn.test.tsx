@@ -172,13 +172,14 @@ describe('getCheckInState — spouse_completed branch', () => {
 // =====================================================================
 
 describe('getCheckInState — todo branch (past / today / future)', () => {
-  it('returns todo with "补打卡" label when task_date < today', () => {
+  it('returns todo with "✓ 补打卡" label when task_date < today', () => {
+    // T-FIX-06-B M13:统一 4 状态 visible label 的 emoji 间距 — todo overdue 加 ✓ 前缀
     const state = getCheckInState(
       makeTask({ task_date: '2026-09-22' }),
       ME_ID,
       TODAY,
     );
-    expect(state).toEqual({ kind: 'todo', label: '补打卡' });
+    expect(state).toEqual({ kind: 'todo', label: '✓ 补打卡' });
   });
 
   it('returns todo with "✓ 打卡" label when task_date === today', () => {
@@ -216,8 +217,8 @@ describe('canCheckIn — all 4 states', () => {
     expect(canCheckIn({ kind: 'todo', label: '✓ 打卡' })).toBe(true);
   });
 
-  it('returns true for todo with "补打卡" label (same kind)', () => {
-    expect(canCheckIn({ kind: 'todo', label: '补打卡' })).toBe(true);
+  it('returns true for todo with "✓ 补打卡" label (same kind — M13 emoji 统一后)', () => {
+    expect(canCheckIn({ kind: 'todo', label: '✓ 补打卡' })).toBe(true);
   });
 
   it('returns false for completed (own check-in — undo leaves for T-US005-3)', () => {
@@ -250,6 +251,49 @@ describe('getCheckInState — purity / sanity', () => {
     const a = getCheckInState(task, ME_ID, TODAY);
     const b = getCheckInState(task, ME_ID, TODAY);
     expect(a).toEqual(b);
+  });
+});
+
+// =====================================================================
+// T-FIX-06-B M13 — 4 状态 visible label emoji 间距统一
+// =====================================================================
+//
+// 设计动机:之前 todo overdue 用 '补打卡'(无 emoji 前缀),与其他 3 状态
+// '✓ 已完成 HH:MM' / '✓ 配偶已完成' / '✓ 打卡' 视觉不齐。M13 加 ✓ 前缀
+// 让 4/4 状态统一 emoji + 1 space + 文本 模式。
+//
+// 覆盖范围:
+//   - todo overdue: '✓ 补打卡'(M13 升级 — 之前 '补打卡')
+//   - todo normal:  '✓ 打卡'(保持不变)
+//   - completed:    '✓ 已完成 HH:MM'(保持不变)
+//   - spouse_completed: '✓ 配偶已完成'(保持不变)
+//   - 全 4 状态 label 不含 trailing whitespace
+
+describe('getCheckInState — visible label emoji uniformity (T-FIX-06-B M13)', () => {
+  it('all 4 state labels use "✓ " prefix (emoji + space) — unified spacing', () => {
+    // 4 状态每个都用 `✓ ` 前缀,符合 M13 polish 目标
+    const states = [
+      { kind: 'todo', label: getCheckInState(makeTask({ task_date: '2026-09-22' }), ME_ID, TODAY).label },
+      { kind: 'todo', label: getCheckInState(makeTask(), ME_ID, TODAY).label },
+      { kind: 'completed', label: getCheckInState(makeTask({ completed_at: '2026-09-23T10:05:00Z', completed_by: ME_ID }), ME_ID, TODAY).label },
+      { kind: 'spouse_completed', label: getCheckInState(makeTask({ completed_at: '2026-09-23T10:05:00Z', completed_by: SPOUSE_ID }), ME_ID, TODAY).label },
+    ];
+
+    for (const s of states) {
+      expect(s.label.startsWith('✓ ')).toBe(true);
+    }
+  });
+
+  it('all visible labels have no trailing whitespace', () => {
+    const states = [
+      getCheckInState(makeTask({ task_date: '2026-09-22' }), ME_ID, TODAY).label,
+      getCheckInState(makeTask(), ME_ID, TODAY).label,
+      getCheckInState(makeTask({ completed_at: '2026-09-23T10:05:00Z', completed_by: ME_ID }), ME_ID, TODAY).label,
+      getCheckInState(makeTask({ completed_at: '2026-09-23T10:05:00Z', completed_by: SPOUSE_ID }), ME_ID, TODAY).label,
+    ];
+    for (const l of states) {
+      expect(l).toBe(l.trim()); // no trailing whitespace
+    }
   });
 });
 

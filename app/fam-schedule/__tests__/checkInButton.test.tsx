@@ -137,14 +137,14 @@ describe('CheckInButton — state derivation (via getCheckInState)', () => {
     expect(canCheckIn(state)).toBe(true);
   });
 
-  it('todo state with "补打卡" when task_date < today', () => {
+  it('todo state with "✓ 补打卡" when task_date < today (T-FIX-06-B M13 emoji prefix)', () => {
     const state = getCheckInState(
       makeTask({ task_date: '2026-09-20' }),
       ME_ID,
       TODAY,
     );
     expect(state.kind).toBe('todo');
-    expect(state.label).toBe('补打卡');
+    expect(state.label).toBe('✓ 补打卡');
     expect(canCheckIn(state)).toBe(true);
   });
 
@@ -198,7 +198,7 @@ describe('CheckInButton — state derivation (via getCheckInState)', () => {
 // (完整 a11y 字符串 = '打卡:喂奶粉 10:00' 等 — 由 buildAccessibilityLabel 拼装,本测试不直接 import)
 
 describe('CheckInButton — a11y label string format (via state.label)', () => {
-  it('todo label has checkin or "补打卡" format', () => {
+  it('todo label has checkin or "✓ 补打卡" format (T-FIX-06-B M13 emoji 统一)', () => {
     const today = getCheckInState(makeTask(), ME_ID, TODAY);
     expect(today.label).toMatch(/^✓ 打卡$/);
     const past = getCheckInState(
@@ -206,7 +206,7 @@ describe('CheckInButton — a11y label string format (via state.label)', () => {
       ME_ID,
       TODAY,
     );
-    expect(past.label).toBe('补打卡');
+    expect(past.label).toBe('✓ 补打卡');
   });
 
   it('completed label has HH:MM suffix', () => {
@@ -271,7 +271,7 @@ describe('CheckInButton — onCheckIn + Alert interaction contract', () => {
     // canCheckIn 与组件内 clickable 判定应严格一致(防御 — 任何不一致说明状态机漂移)
     const states = [
       { kind: 'todo', label: '✓ 打卡', shouldClick: true },
-      { kind: 'todo', label: '补打卡', shouldClick: true },
+      { kind: 'todo', label: '✓ 补打卡', shouldClick: true },
       { kind: 'completed', label: '✓ 已完成 10:05', shouldClick: false },
       { kind: 'cancelled', label: '已取消', shouldClick: false },
       { kind: 'spouse_completed', label: '✓ 配偶已完成', shouldClick: false },

@@ -243,7 +243,7 @@ function CheckInButtonImpl({
           {/* 内圈小赤陶点 — 设计 §3.5 '内圈小赤陶点' */}
           <View style={styles.todoInnerDot} />
         </View>
-        {state.label === '补打卡' ? (
+        {state.label === '✓ 补打卡' ? (
           <Text style={styles.labelBelow} numberOfLines={1}>
             {state.label}
           </Text>
@@ -308,7 +308,9 @@ function buildAccessibilityLabel(
   const time = task.task_time ?? '全天';
   switch (state.kind) {
     case 'todo':
-      return state.label === '补打卡'
+      // T-FIX-06-B M13:统一 4 状态 a11y label 的 emoji 处理 — 屏幕阅读器不读 ✓,
+      // todo 两个分支(✓ 补打卡 / ✓ 打卡)各自给屏幕阅读器友好的中文短语。
+      return state.label === '✓ 补打卡'
         ? `补打卡:${title} ${time}`
         : `打卡:${title} ${time}`;
     case 'completed':
