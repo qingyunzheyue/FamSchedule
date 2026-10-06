@@ -35,6 +35,11 @@
  *   - cancelled 任务点击 CheckInButton → Alert "任务已取消"(UI 层处理)
  *   - 业务上 cancelled 任务不该出现在"今天 / 本周"视图(taskListFilters 过滤掉),
  *     但 extinct cases(刚取消时数据未刷)+ UI 防御仍然保留 cancelled 态分支
+ *
+ * T-FIX-06-C M16:CheckInButton 4 状态 displayText 已由 Batch B M13 统一为
+ * `✓ ` 前缀(`✓ 打卡` / `✓ 补打卡` / `✓ 已完成 HH:MM` / `✓ 配偶已完成`)— 5 个
+ * inline label 字符串仍在本函数内,但都按 ✓ + 1 space + 文本的统一格式排版,
+ * 4/4 状态对齐。本批 verify 无新改动。
  */
 
 import type { Task } from './LocalStore';

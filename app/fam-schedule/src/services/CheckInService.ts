@@ -205,6 +205,10 @@ export async function checkin(
 ): Promise<CheckInResult>;
 export async function checkin(taskId: string): Promise<CheckInResult>;
 export async function checkin(taskId: string, isMakeup: boolean = false): Promise<CheckInResult> {
+  // T-FIX-06-C M17:checkin 是 checkin 主入口。后续 RPC contract 变化时,请同时
+  // 更新 mapCheckInFailureReason(6 reason) + CheckInButton 4 状态 displayText +
+  // UndoChip 5 分钟窗口逻辑。本批为 hygiene marker 注释。
+
   // 1. Pre-check:必须在 family 里
   const family = await getMyFamily();
   if (!family) {
