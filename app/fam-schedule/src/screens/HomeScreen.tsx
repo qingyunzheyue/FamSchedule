@@ -1,10 +1,11 @@
 /**
  * HomeScreen — 任务列表主页 — T-US002-1 + T-US003-2 + T-US005-1 + T-US005-2 +
- *                          T-US015-1 + T-US015-2
+ *                          T-US015-1 + T-US015-2 + T-US015-3
  *
  * 职责(US-002 故事 1/3 — 端到端任务可视化 + US-005 故事 1/4 — 列表打卡 +
  *       US-005 故事 2/4 — 配偶先完成 toast + US-015 故事 1/3 — 启动过期任务查询 +
- *       US-015 故事 2/3 — 顶部过期 banner 渲染):
+ *       US-015 故事 2/3 — 顶部过期 banner 渲染 +
+ *       US-015 故事 3/3 — 点击 banner 跳 ExpiredTasksScreen):
  *   1. mount 时通过 useSyncManager(familyId) 自动 subscribe + Realtime + pullSince
  *   2. 通过 useTasks() 订阅 SyncManager.tasksSnapshot,响应 setTasks / pullSince / realtime 变更
  *   3. URL `?view=today|week|all` 作为视图 source of truth,默认 today
@@ -36,7 +37,8 @@
  *     - **T-US015-1**:useExpiredTaskCount hook 已挂上,console.log 占位输出
  *     - **T-US015-2**:<ExpiredTasksBanner /> 挂在 Header 下 / SegmentedTab 上,
  *       count=0 完全消失,点击当前 noop
- *     - **留 T-US015-3**:点击 banner 跳 ExpiredTasksScreen / 关闭状态持久化
+ *     - **T-US015-3** ✅:点击 banner → router.push('/(main)/(home)/expired') →
+ *       跳 ExpiredTasksScreen 完整过期列表屏;关闭状态持久化留后续(T-US015-4)
  *   - **Skeleton / OfflineBanner**:无(留 Wave 3)
  *   - **TaskCard 点击**:跳 task/[id](TaskDetailScreen)— T-US003-1 已闭环
  *   - **T-US003-2 列表 long-press 删除**:不走二次确认,直接删除 + Alert 已删除
@@ -58,9 +60,9 @@
  * 不在本屏范围:
  *   - 任务详情页(T-US003)— T-US014-2 已闭环(详情页 OverdueBanner)
  *   - 创建任务(走 router.push 到 task-create route,T-US001-1 已闭环)
- *   - 点击 banner 跳 ExpiredTasksScreen(留 T-US015-3 — 当前 onPress noop)
- *   - Banner 关闭状态持久化(留 T-US015-3)
- *   - 过期任务列表 ExpiredTasksScreen(留 T-US015-3)
+ *   - 点击 banner 跳 ExpiredTasksScreen(T-US015-3 ✅ — onPress → router.push)
+ *   - Banner 关闭状态持久化(留 T-US015-4)
+ *   - 过期任务列表 ExpiredTasksScreen(T-US015-3 ✅ — 路由 app/(main)/(home)/expired.tsx)
  *   - 共同执行人 / 周期 / 共享(T-US009 / T-US004-1 / T-US010 后续)
  *   - 打卡历史 / 撤销打卡 / 补卡(US-005 / US-006 后续任务)
  *   - iOS Toast(留 T-FIX-06 polish)
@@ -442,11 +444,16 @@ export function HomeScreen(): React.JSX.Element {
   // + label "你有 N 个任务过期未完成,点击查看" + testID="expired-tasks-banner")。
   const { count: expiredCount, loading: expiredLoading } = useExpiredTaskCount(today);
 
-  // 整条 Pressable onPress 回调 — 本任务 noop(留 T-US015-3 跳 ExpiredTasksScreen)。
+  // 整条 Pressable onPress 回调 — T-US015-3 接路由跳转。
+  //
+  // 点击过期 banner → 跳 /(main)/(home)/expired(ExpiredTasksScreen 完整过期列表屏)。
   // useCallback 包过稳定引用,避免 ExpiredTasksBanner memo 失效连带 TaskList re-render。
+  //
+  // 路由文件:app/(main)/(home)/expired.tsx(thin wrapper 包 ExpiredTasksScreen)
+  // — Expo Router Stack 自动 file-based 扫描注册,不需要在 (home)/_layout.tsx 显式注册。
   const handleExpiredBannerPress = useCallback((): void => {
-    // Noop — T-US015-3 接 router.push('/(main)/(home)/expired-tasks')
-  }, []);
+    router.push('/(main)/(home)/expired');
+  }, [router]);
 
   // ---- 下拉刷新 ----
 
