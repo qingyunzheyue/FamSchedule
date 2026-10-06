@@ -607,7 +607,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: 🟢 **P1**(随 Sprint 2 主线任务落地,不阻塞)
 - **Assignee**: `frontend-dev`
-- **Status**: ✅ Done(2026-10-06)— **Batch A(7 项)完成:M01 + M04 + M06 + M07 + M08 + M09 + M24**;Batch B / C 项留后续 polish(见下"Batch A scope 边界")
+- **Status**: ✅ Done(2026-10-06)— **Batch A(7 项)完成:M01 + M04 + M06 + M07 + M08 + M09 + M24**;**Batch B(8 项)完成:M02 + M03 + M05 + M10 + M12 + M13 + M14 + M19**;Batch C(M16/M17/verify-only)留后续 polish
 - **Source issue**: Review Minor #1, #3, #4, #6, #7, #8, #9, #10, #11
 - **Definition of Done**:
   - **Minor #1** expo patch 漂移:`npx expo install --check` 一把梭,锁到 expo@57.0.23 / expo-build-properties@57.0.20 / expo-notifications@57.0.19;commit lockfile
