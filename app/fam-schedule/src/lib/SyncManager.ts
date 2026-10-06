@@ -36,7 +36,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
-import { supabase } from './supabase';
+import { supabase, rpcTyped } from './supabase';
 import {
   enqueueMutation,
   drainQueue,
@@ -510,18 +510,18 @@ export async function replayQueue(): Promise<void> {
  */
 async function executeOnServer(mutation: PendingMutation): Promise<void> {
   if (mutation.kind === 'checkin') {
-    // `as never`:SDK rpc() 在 typed Database 上 literal-narrowing 有 quirk,
-    // 自动推导的 Args 默认是 `never`,object literal 匹配不上。
-    // 实际请求 payload 正确,服务器能解析。
-    const { error } = await supabase.rpc('checkin_task', {
+    // T-FIX-06-A M06:用 rpcTyped 取代 `as never` cast。
+    // SDK typed-Database 上的 RPC Args narrowing quirk 集中在 supabase.ts 一次性兜底,
+    // 业务侧拿干净的 wrapper API(详见 src/lib/supabase.ts rpcTyped JSDoc)。
+    const { error } = await rpcTyped('checkin_task', {
       p_task_id: mutation.taskId,
       p_is_makeup: mutation.isMakeup,
-    } as never);
+    });
     if (error) throw error;
   } else if (mutation.kind === 'undo_checkin') {
-    const { error } = await supabase.rpc('undo_checkin', {
+    const { error } = await rpcTyped('undo_checkin', {
       p_task_id: mutation.taskId,
-    } as never);
+    });
     if (error) throw error;
   } else if (mutation.kind === 'create_task') {
     // template 行由 client 端直接 insert。RLS 要求 created_by = auth.uid()。

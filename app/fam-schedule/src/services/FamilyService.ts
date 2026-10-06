@@ -52,7 +52,7 @@
  *    任务 brief 里写的 `{p_family_id, p_ttl_minutes?}` 与 schema 不一致 — 以 db-v1.1.sql 为准。
  */
 
-import { supabase } from '../lib/supabase';
+import { supabase, rpcTyped } from '../lib/supabase';
 import type { FamilyRow, FamilyMemberRow } from '../types/database';
 
 // =====================================================================
@@ -132,19 +132,19 @@ let cachedFamilyId: string | null = null;
  *    跳过 pre-check 让 RPC 直接做 authoritative 判断,避免双重查表。
  */
 export async function createInvite(): Promise<CreateInviteResult> {
-  // supabase-js typed Database 在 RPC 上有 Args narrowing quirk,
-  // 按 SyncManager.ts:425 / acceptInvite 模式用 `as CallableFunction` cast 规避。
-  const { data, error } = await (supabase.rpc as CallableFunction)(
-    'create_invite',
-  ) as {
-    data: { code: string; expires_at: string } | null;
-    error: { message: string } | null;
-  };
+  // T-FIX-06-A M06:用 rpcTyped 取代 `as CallableFunction` cast。
+  // SDK typed-Database 上的 RPC Args narrowing quirk 集中在 supabase.ts 一次性兜底,
+  // 业务侧拿干净的 wrapper API(详见 src/lib/supabase.ts rpcTyped JSDoc)。
+  // create_invite 是无参 RPC(db-v1.1.sql §4.2)— TArgs 留 undefined。
+  const { data, error } = await rpcTyped<
+    undefined,
+    { code: string; expires_at: string }
+  >('create_invite');
 
   if (error) {
     // eslint-disable-next-line no-console
     console.warn('[FamilyService] create_invite rpc error:', error.message);
-    return { status: 'failed', reason: error.message };
+    return { status: 'failed', reason: error.message ?? 'unknown rpc error' };
   }
 
   if (!data) {
@@ -256,15 +256,15 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData?.user?.id ?? '';
 
-  // 3. 调 RPC(supabase-js typed Database 在 RPC 上有 Args narrowing quirk,
-  //    按 SyncManager.ts:425 注释用 `as never` cast 规避)
-  const { data, error } = await (supabase.rpc as CallableFunction)(
-    'accept_invite',
-    { p_code: code },
-  ) as { data: unknown; error: { message: string } | null };
+  // 3. 调 RPC — T-FIX-06-A M06:用 rpcTyped 取代 `as CallableFunction` cast。
+  //    SDK typed-Database 上的 RPC Args narrowing quirk 集中在 supabase.ts 一次性兜底,
+  //    业务侧拿干净的 wrapper API(详见 src/lib/supabase.ts rpcTyped JSDoc)。
+  const { data, error } = await rpcTyped<{ p_code: string }>('accept_invite', {
+    p_code: code,
+  });
 
   if (error) {
-    const msg = error.message.toLowerCase();
+    const msg = (error.message ?? '').toLowerCase();
     if (msg.includes('invalid') || msg.includes('not found') || msg.includes('no invite')) {
       // eslint-disable-next-line no-console
       console.warn('[FamilyService] accept_invite invalid:', error.message);

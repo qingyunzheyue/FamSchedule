@@ -79,6 +79,9 @@ jest.mock('../src/lib/supabase', () => {
       channel: (...args: unknown[]) => mockChannel(...args),
       removeChannel: (...args: unknown[]) => mockRemoveChannel(...args),
     },
+    // T-FIX-06-A M06:SyncManager 现走 rpcTyped wrapper,而不是直接 supabase.rpc。
+    // mock 让 rpcTyped 直接调底层 mockRpc(行为一致),仍可断言 mockRpc 调用形态。
+    rpcTyped: (...args: unknown[]) => mockRpc(...args),
   };
 });
 
