@@ -20,6 +20,21 @@
 import type { Task } from '../src/lib/LocalStore';
 import { TaskCard, type TaskCardProps } from '../src/components/TaskCard';
 
+// ---- Mocks(避免 tamagui ESM 触发 import 解析)— T-FIX-06-A M24:TaskCard 现在
+//      用 useTheme() 拿 warning token 颜色。stub 一个最小 theme 让 jest 加载 TaskCard
+//      时不触发 tamagui ESM 链。本测试不渲染 TaskCard(只测 props 契约),所以 theme
+//      字段不被实际读;但 import 必须 mock 否则 jest 解析失败。
+//
+// T-FIX-06-A M24 contract:锁定 warning token 期望值,与 design §1.1 + tamagui.config.ts
+// colorTokens 对齐。如果有人改坏 token 值,这里会立刻报错。
+jest.mock('tamagui', () => ({
+  useTheme: () => ({
+    warning: { val: '#C95444' },
+    warningBg: { val: '#FBEAE6' },
+    warningBorder: { val: '#F0C9BD' },
+  }),
+}));
+
 // =====================================================================
 // Test fixtures
 // =====================================================================

@@ -49,6 +49,16 @@ jest.mock('phosphor-react-native', () => ({
   CaretRight: () => null,
 }));
 
+// T-FIX-06-A M24:ExpiredTasksBanner 用 useTheme() 拿 warning token,stub tamagui 让 jest
+// 不触发 tamagui ESM 解析失败。
+jest.mock('tamagui', () => ({
+  useTheme: () => ({
+    warning: { val: '#C95444' },
+    warningBg: { val: '#FBEAE6' },
+    warningBorder: { val: '#F0C9BD' },
+  }),
+}));
+
 // =====================================================================
 // Test fixtures
 // =====================================================================

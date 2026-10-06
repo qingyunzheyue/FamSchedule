@@ -41,17 +41,15 @@
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { CaretRight, Warning } from 'phosphor-react-native';
+import { useTheme } from 'tamagui';
 
 // =====================================================================
 // 1. 常量(颜色 — 与 OverdueBanner.tsx / TaskCard.tsx / design §1.1 对齐)
 // =====================================================================
-
-/** warning 主色 — 与 OverdueBanner / TaskCard 复用 */
-const COLOR_WARNING = '#C95444';
-/** warning 浅底 — 与 TaskCard 过期 bg 同色 */
-const COLOR_WARNING_BG = '#FBEAE6';
-/** warning 描边 — 1px subtle,符合设计系统 */
-const COLOR_WARNING_BORDER = '#F0C9BD';
+//
+// T-FIX-06-A M24:warning 系列色改用 Tamagui theme token(`$warning` / `$warningBg` /
+// `$warningBorder`),不再用本地 hex 常量。useTheme() 必须在组件内调用,
+// 组件内 inline style 引用 token 值,跨 light/dark 自动适配。
 
 /** "查看 →" 链接文案(独立常量便于 i18n) */
 const VIEW_LINK_LABEL = '查看 →';
@@ -128,6 +126,12 @@ function ExpiredTasksBannerImpl({
   onPress,
   loading,
 }: ExpiredTasksBannerProps): React.JSX.Element | null {
+  // T-FIX-06-A M24:warning 系列色从 theme token 拿,跨 light/dark 自动适配
+  const theme = useTheme();
+  const warningFg = (theme.warning?.val ?? '#C95444') as string;
+  const warningBg = (theme.warningBg?.val ?? '#FBEAE6') as string;
+  const warningBorder = (theme.warningBorder?.val ?? '#F0C9BD') as string;
+
   // ---------------------------------------------------------------------
   // 可见性 gate(DoD:N=0 完全消失 / loading 期间不渲染)
   // ---------------------------------------------------------------------
@@ -153,7 +157,11 @@ function ExpiredTasksBannerImpl({
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.container, pressed ? styles.pressed : null]}
+      style={({ pressed }) => [
+        styles.container,
+        { backgroundColor: warningBg, borderColor: warningBorder },
+        pressed ? styles.pressed : null,
+      ]}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={a11yLabel}
@@ -161,22 +169,22 @@ function ExpiredTasksBannerImpl({
     >
       {/* 左:⚠ icon */}
       <View style={styles.iconColumn}>
-        <Warning size={20} color={COLOR_WARNING} weight="fill" />
+        <Warning size={20} color={warningFg} weight="fill" />
       </View>
 
       {/* 中:文案 */}
       <View style={styles.messageColumn}>
-        <Text style={styles.messageText} numberOfLines={1}>
+        <Text style={[styles.messageText, { color: warningFg }]} numberOfLines={1}>
           {text}
         </Text>
       </View>
 
       {/* 右:查看链接 */}
       <View style={styles.linkColumn}>
-        <Text style={styles.linkText} numberOfLines={1}>
+        <Text style={[styles.linkText, { color: warningFg }]} numberOfLines={1}>
           {VIEW_LINK_LABEL}
         </Text>
-        <CaretRight size={14} color={COLOR_WARNING} weight="bold" />
+        <CaretRight size={14} color={warningFg} weight="bold" />
       </View>
     </Pressable>
   );
@@ -197,8 +205,8 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLOR_WARNING_BG,
-    borderColor: COLOR_WARNING_BORDER,
+    // backgroundColor / borderColor 由组件 inline 提供(theme.warningBg / warningBorder token)
+    // — T-FIX-06-A M24
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 12,
@@ -220,7 +228,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   messageText: {
-    color: COLOR_WARNING,
+    // color 由组件 inline 提供(theme.warning token)— T-FIX-06-A M24
     fontSize: 14,
     fontWeight: '600',
   },
@@ -230,7 +238,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   linkText: {
-    color: COLOR_WARNING,
+    // color 由组件 inline 提供(theme.warning token)— T-FIX-06-A M24
     fontSize: 13,
     fontWeight: '600',
   },

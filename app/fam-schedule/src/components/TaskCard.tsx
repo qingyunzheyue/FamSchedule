@@ -42,6 +42,7 @@
 
 import { memo } from 'react';
 import { StyleSheet, View, Text, Pressable } from 'react-native';
+import { useTheme } from 'tamagui';
 
 import type { Task } from '../lib/LocalStore';
 import { computeTaskBadge, formatTaskTime, type TaskBadge } from '../lib/taskListFilters';
@@ -50,6 +51,16 @@ import { CheckInButton } from './CheckInButton';
 // =====================================================================
 // Constants — 与 CreateTaskScreen 颜色系统对齐
 // =====================================================================
+//
+// T-FIX-06-A M24:COLOR_WARNING / COLOR_WARNING_BG / COLOR_WARNING_BORDER 改用 Tamagui
+// theme token(`$warning` / `$warningBg` / `$warningBorder`),不再用本地 hex 常量。
+// useTheme() 必须在组件内调用 — StyleSheet 引用方式保留(模块顶层 + 引用 theme 取到的值)。
+//
+// 仍保留在模块顶层的非语义色(品牌 / 中性):
+//   - COLOR_PRIMARY / COLOR_SURFACE / COLOR_BG / COLOR_BORDER / COLOR_TEXT_*
+//   - COLOR_SUCCESS / COLOR_BADGE_BG_NEUTRAL
+// 这些仍走本地 hex,但实际上 brand color 也是 token 化的好候选 — 本次 scope 仅限
+// warning 系列,其余留后续 polish(避免改动面爆炸)。
 
 const COLOR_PRIMARY = '#DC5A24'; // 赤陶
 const COLOR_SURFACE = '#FFFFFF'; // 卡片背景(亮 surface)
@@ -57,8 +68,6 @@ const COLOR_BG = '#F4ECDC'; // 亚麻容器背景(与 CreateTaskScreen container
 const COLOR_BORDER = '#E8DFD0'; // 亚麻描边
 const COLOR_TEXT_PRIMARY = '#3A2E20';
 const COLOR_TEXT_SECONDARY = '#7A6B57';
-const COLOR_WARNING = '#C95444';
-const COLOR_WARNING_BG = '#FBEAE6';
 const COLOR_SUCCESS = '#5C9D7E';
 const COLOR_BADGE_BG_NEUTRAL = '#FFF9F0';
 
@@ -74,16 +83,22 @@ interface TaskBadgeChipProps {
  * Badge chip —— 根据 kind 上色。
  *
  * - completed / cancelled:中性灰(状态已完成,无需警示色)
- * - overdue:红(警示)
+ * - overdue:红(警示)— T-FIX-06-A M24:改用 `$warning` / `$warningBg` token
  * - today:赤陶(强调今天)
  * - tomorrow:亚麻描边(温和提示)
  * - weekday / date:亚麻描边(普通日期)
+ *
+ * T-FIX-06-A M24:warning 色改从 theme 拿,避免本地 hex 常量漂移;
+ * 跨 light/dark theme 自动适配。
  */
 function TaskBadgeChip({ badge }: TaskBadgeChipProps): React.JSX.Element {
+  const theme = useTheme();
+  const warningFg = (theme.warning?.val ?? '#C95444') as string;
+  const warningBg = (theme.warningBg?.val ?? '#FBEAE6') as string;
   const { bg, fg, border } = (() => {
     switch (badge.kind) {
       case 'overdue':
-        return { bg: '#FBEAE6', fg: COLOR_WARNING, border: COLOR_WARNING };
+        return { bg: warningBg, fg: warningFg, border: warningFg };
       case 'today':
         return { bg: COLOR_PRIMARY, fg: '#FFFFFF', border: COLOR_PRIMARY };
       case 'completed':
@@ -183,6 +198,13 @@ function TaskCardImpl({
   currentUserId = '',
   today = '',
 }: TaskCardProps): React.JSX.Element {
+  // T-FIX-06-A M24:warning 系列色改从 theme token 拿,避免本地 hex 常量漂移。
+  // useTheme() 必须在组件顶层调用 — 这里同时被 TaskBadgeChip 和本组件消费,
+  // 各自独立 useTheme 调用,运行时 hook order 一致(Tamagui provider 保证)。
+  const theme = useTheme();
+  const warningFg = (theme.warning?.val ?? '#C95444') as string;
+  const warningBg = (theme.warningBg?.val ?? '#FBEAE6') as string;
+
   // 视觉变体派生
   const isCompleted = badge.kind === 'completed';
   const isCancelled = badge.kind === 'cancelled';
@@ -194,7 +216,7 @@ function TaskCardImpl({
   else if (isCancelled) cardOpacity = 0.4;
 
   // 整卡背景:overdue 用 warning 浅底,其他 surface 白
-  const cardBg = isOverdue ? COLOR_WARNING_BG : COLOR_SURFACE;
+  const cardBg = isOverdue ? warningBg : COLOR_SURFACE;
 
   const handlePress = (): void => {
     onPress(task);
@@ -280,8 +302,10 @@ function TaskCardImpl({
         </View>
       )}
 
-      {/* 过期:左侧 4px 红竖条(absolute,贴在 card 左缘) */}
-      {isOverdue ? <View style={styles.overdueBar} /> : null}
+      {/* 过期:左侧 4px 红竖条(absolute,贴在 card 左缘)
+          T-FIX-06-A M24:backgroundColor 改用 theme.warning token,
+          跨 light/dark theme 自动适配 */}
+      {isOverdue ? <View style={[styles.overdueBar, { backgroundColor: warningFg }]} /> : null}
     </Pressable>
   );
 }
@@ -370,7 +394,8 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 4,
-    backgroundColor: COLOR_WARNING,
+    // backgroundColor 由 TaskCardImpl 内联提供(从 theme.warning token 拿值),
+    // 避免本地 hex 常量漂移(T-FIX-06-A M24)。
   },
 });
 

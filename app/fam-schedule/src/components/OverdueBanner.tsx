@@ -36,19 +36,20 @@
 import { memo, useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View, Alert } from 'react-native';
 import { Warning } from 'phosphor-react-native';
+import { useTheme } from 'tamagui';
 
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
 // 1. 常量(颜色 / 文案 — 与 TaskCard / TaskDetailScreen 对齐)
 // =====================================================================
-
-/** warning 主色 — 设计 §1.1 token + TaskCard.tsx 复用 */
-const COLOR_WARNING = '#C95444';
-/** warning 浅底 — 与 TaskCard 过期 bg 同色,保证视觉一致 */
-const COLOR_WARNING_BG = '#FBEAE6';
-/** warning 描边 — 1px subtle,符合设计系统 */
-const COLOR_WARNING_BORDER = '#F0C9BD';
+//
+// T-FIX-06-A M24:warning 系列色改用 Tamagui theme token(`$warning` / `$warningBg` /
+// `$warningBorder`),不再用本地 hex 常量。useTheme() 必须在组件内调用,这里通过
+// useOverdueBannerTheme() 局部 hook + 组件内 useTheme() 拿值,跨 light/dark 自动适配。
+//
+// 留 COLOR_TEXT_ON_WARNING(白底文字)— 补卡按钮仍用白字,不进 theme token。
+const COLOR_TEXT_ON_WARNING = '#FFFFFF';
 
 /** "补卡"按钮文案(独立常量便于 i18n) */
 const MAKEUP_BUTTON_LABEL = '补卡';
@@ -93,6 +94,12 @@ function OverdueBannerImpl({
   message,
   onMakeUp,
 }: OverdueBannerProps): React.JSX.Element {
+  // T-FIX-06-A M24:warning 系列色从 theme token 拿,跨 light/dark 自动适配
+  const theme = useTheme();
+  const warningFg = (theme.warning?.val ?? '#C95444') as string;
+  const warningBg = (theme.warningBg?.val ?? '#FBEAE6') as string;
+  const warningBorder = (theme.warningBorder?.val ?? '#F0C9BD') as string;
+
   // ---------------------------------------------------------------------
   // Handler
   // ---------------------------------------------------------------------
@@ -119,19 +126,22 @@ function OverdueBannerImpl({
 
   return (
     <View
-      style={styles.container}
+      style={[
+        styles.container,
+        { backgroundColor: warningBg, borderColor: warningBorder },
+      ]}
       accessibilityRole="alert"
       accessibilityLabel={a11yLabel}
       testID="overdue-banner"
     >
       {/* 左:⚠ icon */}
       <View style={styles.iconColumn}>
-        <Warning size={20} color={COLOR_WARNING} weight="fill" />
+        <Warning size={20} color={warningFg} weight="fill" />
       </View>
 
       {/* 中:文案 */}
       <View style={styles.messageColumn}>
-        <Text style={styles.messageText} numberOfLines={1}>
+        <Text style={[styles.messageText, { color: warningFg }]} numberOfLines={1}>
           {message}
         </Text>
       </View>
@@ -140,6 +150,7 @@ function OverdueBannerImpl({
       <Pressable
         style={({ pressed }) => [
           styles.makeUpButton,
+          { backgroundColor: warningFg },
           pressed ? styles.makeUpButtonPressed : null,
         ]}
         onPress={handleMakeUpPress}
@@ -169,8 +180,8 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLOR_WARNING_BG,
-    borderColor: COLOR_WARNING_BORDER,
+    // backgroundColor / borderColor 由组件 inline 提供(theme.warningBg / warningBorder token)
+    // — T-FIX-06-A M24
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 12,
@@ -187,12 +198,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   messageText: {
-    color: COLOR_WARNING,
+    // color 由组件 inline 提供(theme.warning token)
+    // — T-FIX-06-A M24
     fontSize: 14,
     fontWeight: '600',
   },
   makeUpButton: {
-    backgroundColor: COLOR_WARNING,
+    // backgroundColor 由组件 inline 提供(theme.warning token)
+    // — T-FIX-06-A M24
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 8,
@@ -204,7 +217,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   makeUpButtonLabel: {
-    color: '#FFFFFF',
+    color: COLOR_TEXT_ON_WARNING,
     fontSize: 13,
     fontWeight: '600',
   },

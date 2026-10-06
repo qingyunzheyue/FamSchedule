@@ -111,9 +111,14 @@ const colorTokens = createTokens({
     success: '#5C9D7E',
     successBg: '#E8F0EA',
     successText: '#2E5945',
-    warning: '#E0A341',
-    warningBg: '#FBF1DC',
-    warningText: '#7A5615',
+    // T-FIX-06-A M24:warning 系列 token 改为 overdue/警告 红(对齐 TaskCard / OverdueBanner /
+    // ExpiredTasksBanner 已有 #C95444 + #FBEAE6 + #F0C9BD)。原 amber #E0A341 是早期
+    // "提醒"语义(amber/咖啡色),但目前 UI 中 overdue banner 实际是红色,且组件层过去
+    // 直接用本地 hex 常量;统一进 theme token 后,组件改用 `$warning` token 引用。
+    warning: '#C95444',
+    warningBg: '#FBEAE6',
+    warningBorder: '#F0C9BD',
+    warningText: '#7A2E25',
     error: '#C95444',
     errorBg: '#FBEAE7',
     errorText: '#7A2E25',
@@ -200,9 +205,11 @@ const lightTheme = {
   success: '#5C9D7E',
   successBg: '#E8F0EA',
   successText: '#2E5945',
-  warning: '#E0A341',
-  warningBg: '#FBF1DC',
-  warningText: '#7A5615',
+  // T-FIX-06-A M24:light warning = 红 over 浅红底 + 红描边(对齐 design §1.1 + component 现用法)
+  warning: '#C95444',
+  warningBg: '#FBEAE6',
+  warningBorder: '#F0C9BD',
+  warningText: '#7A2E25',
   error: '#C95444',
   errorBg: '#FBEAE7',
   errorText: '#7A2E25',
@@ -236,9 +243,11 @@ const darkTheme = {
   success: '#5C9D7E',
   successBg: '#1F2A24',
   successText: '#A0C5B0',
-  warning: '#E0A341',
-  warningBg: '#2F2517',
-  warningText: '#D9B97A',
+  // T-FIX-06-A M24:dark warning 提亮 + 浅底/深底配对比 — 比 light 略调亮保可读
+  warning: '#E07B6A', // 提亮 #C95444 → #E07B6A,保深色背景对比
+  warningBg: '#2F1A18', // 同 dark errorBg
+  warningBorder: '#5A2A24', // 比 bg 略亮一档
+  warningText: '#E0A39A',
   error: '#C95444',
   errorBg: '#2F1A18',
   errorText: '#E0A39A',
