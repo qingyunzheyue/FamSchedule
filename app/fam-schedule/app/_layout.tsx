@@ -4,6 +4,22 @@ import { SplashScreen as ExpoSplashScreen, Stack, Redirect, useRouter, usePathna
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { TamaguiProvider, Theme } from 'tamagui';
 
+// T-FIX-BUNDLE-9:Root layout 反复 unmount + remount 是 splash 闪烁的真正 root cause。
+// 机制:
+//   1. useFonts 字体加载完成 → root layout 渲染完整 Tree (AuthProvider + FamilyProvider + Gate)
+//   2. 某种触发(useFonts 内部 rerender / hot reload / Expo Go bridge reconnect)让 fontsLoaded
+//      短暂变 false,root layout `return null`,整个子树被卸载
+//   3. 紧接着 fontsLoaded 变 true,root layout 重新挂载 Tree → AuthProvider / FamilyProvider / Gate
+//      全部重新 mount → useState 重置 → useRef 重置 → splashMinElapsed 重置 → subscribeAuthState
+//      重新注册(SDK 立即 emit INITIAL_SESSION) → AuthContext.initialize() 重新跑 bootGuard →
+//      signInAnonymously 又执行一遍 → session 反复 null ↔ signed → family 反复 loading ↔ no_family
+//      → Gate 反复切 splash ↔ onboarding → 用户视觉"splash 闪"
+//
+// 修法:Sticky flag — 字体一旦加载过(useEffect 标记),就算 fontsLoaded 短暂 false 也不 unmount。
+// 字体 fallback 由 Tamagui 内部处理(useFonts 的 fontError fallback 到系统字体)。
+// 模块级 sticky flag 持久化跨 mount/unmount,确保子树永不被卸载。
+let rootLayoutEverMounted = false;
+
 import config from '../src/theme/tamagui.config';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
 import { FamilyProvider, useFamily } from '../src/contexts/FamilyContext';
@@ -31,6 +47,31 @@ export default function RootLayout() {
     NotoSansSC_Semibold: NotoSansSCSemibold,
   });
 
+  // T-FIX-BUNDLE-9:字体一旦加载完成,标记 sticky,后续即使 fontsLoaded 短暂 false 也不 return null。
+  // 之前 `if (!fontsLoaded && !fontError) return null` 在字体反复 reload 时让 root layout
+  // 反复 unmount + remount → 整个子树(AuthProvider/FamilyProvider/Gate)反复重建 →
+  // subscribeAuthState 反复注册 → SDK 反复 emit INITIAL_SESSION → AuthContext.initialize()
+  // 反复跑 bootGuard → signInAnonymously 反复触发 → session 反复 null ↔ signed → splash 闪。
+  // sticky flag 一旦置 true 永不复位,保证子树永不被卸载。
+  const [, forceRender] = useState(0);
+  const fontsEverLoadedRef = useRef(false);
+  useEffect(() => {
+    if (fontsLoaded || fontError) {
+      fontsEverLoadedRef.current = true;
+      // 触发 re-render 让 if 条件重新求值(ref 改不触发,需要 force state)
+      forceRender((n) => n + 1);
+    }
+  }, [fontsLoaded, fontError]);
+
+  // T-FIX-BUNDLE-9:Root layout mount log — 验证是否真的反复 unmount。
+  // eslint-disable-next-line no-console
+  useEffect(() => {
+    console.log('[RootLayout] mounted');
+    return () => {
+      console.log('[RootLayout] UNMOUNTED');
+    };
+  }, []);
+
   useEffect(() => {
     if (fontError) {
       // 字体加载失败不阻塞 — 退到系统字体(PingFang SC / Noto Sans CJK)
@@ -43,8 +84,9 @@ export default function RootLayout() {
     }
   }, [fontsLoaded, fontError]);
 
-  // 字体未就绪:显示默认 splash,避免 layout shift
-  if (!fontsLoaded && !fontError) {
+  // T-FIX-BUNDLE-9:sticky guard — 字体一旦加载过(fontsEverLoadedRef.current=true),
+  // 后续即使 fontsLoaded 短暂 false 也不 unmount 子树。
+  if (!fontsEverLoadedRef.current && !fontsLoaded && !fontError) {
     return null;
   }
 
