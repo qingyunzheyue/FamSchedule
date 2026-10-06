@@ -128,6 +128,18 @@ function Gate() {
   const { isLoading, session, bootError, retryBoot } = useAuth();
   const family = useFamily();
 
+  // T-FIX-BUNDLE-12:Gate mount log — 用户报"splash 还闪但没 log",说明 RootLayout 没反复 unmount
+  // (BUNDLE-11 已修),但 Gate 可能在反复 remount。验证 Gate mount 计数。
+  const gateMountCountRef = useRef(0);
+  // eslint-disable-next-line no-console
+  useEffect(() => {
+    gateMountCountRef.current += 1;
+    console.log('[Gate] MOUNTED count=' + gateMountCountRef.current);
+    return () => {
+      console.log('[Gate] UNMOUNTED count=' + gateMountCountRef.current);
+    };
+  }, []);
+
   // T-FIX-BUNDLE-8:Splash 最小停留 800ms — 防止状态抖动导致的视觉"闪屏"。
   //   - 启动期 bootGuard / family.refresh 状态切换极频繁(<100ms 级别),如果 Gate 立即
   //     跟着切 splash ↔ main,用户视觉上看到的是一闪一闪
