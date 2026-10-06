@@ -79,6 +79,7 @@ import {
   rescheduleAll,
   setNotificationTapHandler,
   _resetForTests,
+  _cleanupTapListener,
 } from '../src/lib/NotificationScheduler';
 
 // ---- 测试辅助 ---------------------------------------------------------
@@ -125,7 +126,9 @@ beforeEach(() => {
   mockCancelAll.mockResolvedValue(undefined);
   mockGetAll.mockResolvedValue([]);
   mockSetChannel.mockResolvedValue('channel-id');
-  mockAddResponseListener.mockReturnValue({ remove: jest.fn() });
+  // T-FIX-06-A M04:用 mockImplementation(每次返回新 { remove })取代 mockReturnValue(同一对象),
+  // 让 M04 cleanup 测试能验证"两次 init 注册的是不同 subscription 实例"。
+  mockAddResponseListener.mockImplementation(() => ({ remove: jest.fn() }));
   mockGetLastResponse.mockResolvedValue(null);
   _resetForTests();
 });
@@ -472,5 +475,72 @@ describe('NotificationScheduler notification tap routing', () => {
     await init();
 
     expect(tap).toHaveBeenCalledWith(baseTask.id);
+  });
+});
+
+// ============================================================
+// 7. M04 tap listener cleanup(防 dev hot-reload / 测试间 sub 泄漏)
+// ============================================================
+
+describe('NotificationScheduler M04 tap listener cleanup', () => {
+  it('init() 保存 addNotificationResponseReceivedListener 返回值(tapListenerSub)', async () => {
+    // init 后 mockAddResponseListener 应被调 1 次,返回的 { remove } 句柄被 module 持有。
+    // 我们无法直接读 module-scope tapListenerSub(没 export),但通过"再次 init 不重注册 +
+    // reset 后重新 init"间接验证。
+    await init();
+    expect(mockAddResponseListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('_cleanupTapListener() 调用 .remove() 并清掉 module-scope subscription', async () => {
+    // 第一次 init 注册 sub;cleanup 应调 .remove()
+    await init();
+
+    // 第一次的 sub.handle.remove 被记录下来(因为 mockAddResponseListener 是
+    // jest.fn().mockReturnValue({ remove: jest.fn() }),每次返回的是新 jest.fn())
+    const firstSub = mockAddResponseListener.mock.results[0].value as { remove: jest.Mock };
+    expect(firstSub.remove).not.toHaveBeenCalled();
+
+    await _cleanupTapListener();
+    expect(firstSub.remove).toHaveBeenCalledTimes(1);
+
+    // 二次 cleanup 幂等(no-op,不再触发 .remove)
+    await _cleanupTapListener();
+    expect(firstSub.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('_cleanupTapListener() 在没注册时是 no-op(安全)', async () => {
+    // 不调 init → tapListenerSub 仍是 null → cleanup 不抛、不报
+    await _cleanupTapListener();
+    // mockRemoveFn 没被调过(因为没 init)
+    expect(mockAddResponseListener).not.toHaveBeenCalled();
+  });
+
+  it('_resetForTests() 集成 cleanup — reset 后 tap listener 被释放', async () => {
+    // init → reset → cleanup chain 全跑,旧 sub.remove 被调
+    await init();
+    const firstSub = mockAddResponseListener.mock.results[0].value as { remove: jest.Mock };
+    expect(firstSub.remove).not.toHaveBeenCalled();
+
+    await _resetForTests();
+    expect(firstSub.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('reset → 重新 init → 旧的 sub 被 remove,新的 sub 被注册(listener 净数不变)', async () => {
+    // 这是 brief 要求的核心场景:"二次调 init → tapListenerSub 清理 + 重新注册,
+    // listener 数不变"。但 init() 是 idempotent,所以"重新 init"语义是 reset 后再 init:
+    //   - 旧 sub → remove
+    //   - 新 init → 新 sub → 新 listener
+    //   - 净 listener 数 = 1(始终保持一个活的 tap listener,没有累积)
+    await init();
+    const firstSub = mockAddResponseListener.mock.results[0].value as { remove: jest.Mock };
+
+    await _resetForTests(); // 清掉旧 sub
+    expect(firstSub.remove).toHaveBeenCalledTimes(1);
+
+    await init(); // 重新注册新 sub
+    expect(mockAddResponseListener).toHaveBeenCalledTimes(2);
+    const secondSub = mockAddResponseListener.mock.results[1].value as { remove: jest.Mock };
+    expect(secondSub).not.toBe(firstSub);
+    expect(secondSub.remove).not.toHaveBeenCalled();
   });
 });

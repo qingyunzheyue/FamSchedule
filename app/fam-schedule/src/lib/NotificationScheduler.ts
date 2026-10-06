@@ -56,7 +56,9 @@
  *   - `initialized`:幂等保护(eager init)
  *   - `permissionRequested`:幂等保护(permission request)
  *   - `onTapHandler`:通知点击回调注册(setNotificationTapHandler 设置)
- *   - `_resetForTests`:jest 测试间重置(不暴露给业务)
+ *   - `tapListenerSub`:init() 注册的 tap listener 句柄,可被 `_cleanupTapListener()` 清理
+ *     (T-FIX-06-A M04 — 防 dev hot-reload / 测试间 sub 引用泄漏)
+ *   - `_resetForTests`:jest 测试间重置(不暴露给业务,内部调 `_cleanupTapListener()`)
  */
 
 import { useEffect } from 'react';
@@ -138,6 +140,17 @@ const DEFAULT_REMINDER_MINUTE = 0;
 export type NotificationTapHandler = (taskId: string | null) => void;
 
 let onTapHandler: NotificationTapHandler | null = null;
+
+// Tap listener subscription 句柄 — 持有 addNotificationResponseReceivedListener 的返回值,
+// 便于:
+//   1. dev hot-reload 时旧 module 已 unload,旧 sub 还活着 → 内存泄漏 + 多次回调
+//   2. 测试间清理(tapListenerSub?.remove() 后 sub 不再触发回调)
+//   3. `_resetForTests()` 兜底清理,避免测试间污染
+// 类型用 `any`(lazy require 后无法静态引用 expo-modules-core NotificationSubscription,
+// 见 T-FIX-BUNDLE-4 注释)— runtime check 守住语义契约。
+/* eslint-disable @typescript-eslint/no-explicit-any */
+let tapListenerSub: any = null;
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * 注册通知点击回调。
@@ -222,7 +235,10 @@ export async function init(): Promise<boolean> {
   }
 
   // Tap listener(前台 / 后台已运行)
-  _Notifications.addNotificationResponseReceivedListener((response: {
+  // T-FIX-06-A M04:保存 listener 返回的 subscription 句柄到 module-scope,
+  // 便于 `_cleanupTapListener()` / `_resetForTests()` / dev hot-reload 时清理,
+  // 避免内存泄漏 + 多实例重叠回调。
+  tapListenerSub = _Notifications.addNotificationResponseReceivedListener((response: {
     notification: {
       request: { content: { data: unknown } };
     };
@@ -522,6 +538,31 @@ export async function _resetForTests(): Promise<void> {
   initialized = false;
   permissionRequested = false;
   onTapHandler = null;
+  // T-FIX-06-A M04:清理上一轮 init 注册的 tap listener subscription,避免测试间
+  // listener 引用累积 + mockRemove 调用计数污染。
+  // 兜底:即使 tapListenerSub 是 null 也安全(见 _cleanupTapListener)。
+  await _cleanupTapListener();
+}
+
+/**
+ * 清理当前已注册的 tap listener subscription(如有)。
+ *
+ * 调用场景:
+ *   - 测试间重置(`_resetForTests()` 自动调)— 兜底,确保下一个 test case 干净
+ *   - dev hot-reload 收尾(若 module load 但 init() 已跑过,旧 sub 还活着)
+ *   - 业务侧切换 family / 切换用户的极端情况(留扩展点,当前不强制调)
+ *
+ * 安全语义:即使没注册过(tapListenerSub === null)也 no-op,不抛。
+ * 幂等:连续调两次,第二次仍是 no-op。
+ *
+ * T-FIX-BUNDLE-4:Expo Go / require failed → `_Notifications` 是 null,init() 早早 return,
+ * tapListenerSub 仍是初始 null,本函数 no-op,行为正确。
+ */
+export async function _cleanupTapListener(): Promise<void> {
+  if (tapListenerSub) {
+    tapListenerSub.remove();
+    tapListenerSub = null;
+  }
 }
 
 /**
