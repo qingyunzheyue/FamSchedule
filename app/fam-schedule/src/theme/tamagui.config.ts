@@ -47,6 +47,11 @@ const notoFont = createFont({
     heading: 17,
     title: 22,
     display: 36,
+    // Tamagui Button size="$buttonMd" 会同时设 width/height(走 tokens.size.buttonMd=44)
+    // 和 fontSize(fontSize 走 font.size tokens);后者若找不到 key 会 warn:
+    // "No font size found $buttonMd undefined in size tokens [...]"
+    // T-FIX-BUNDLE-5:buttonMd → heading=17,保持 retry/CTA 类按钮字号一致
+    buttonMd: 17,
   },
   lineHeight: {
     micro: 16,
