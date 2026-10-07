@@ -253,3 +253,67 @@ describe('OverdueBanner — integration contract with formatOverdueHours', () =>
     }
   });
 });
+
+// =====================================================================
+// T-US006: 删 placeholder Alert,简化为 onMakeUp 透传
+// =====================================================================
+//
+// 升级动机:
+//   - T-US014-2 时 OverdueBanner 内部 Alert.alert('补卡功能等 T-US006 接入') 是 placeholder
+//   - T-US006 真补卡 RPC 接好后:handler 只透传 onMakeUp 给父层,父层(TaskDetailScreen.handleMakeUp)
+//     调 CheckInService.checkin(taskId, true) + Alert 反馈
+//   - 本组件保持"纯展示 — 不知 service" 的契约,严禁回归到内嵌 Alert
+//
+// 验证策略:verify-by-source(沿用 homeSpouseCompleted.test.tsx 模式) —
+// 直接断言源码已删除 placeholder 常量 + 简化 handler + 不再 import Alert
+// (不挂载组件,因为 jest-expo + Tamagui 限制)
+describe('OverdueBanner — T-US006 placeholder removal (verify-by-source)', () => {
+  let source: string;
+
+  beforeAll(() => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    const path = require('path');
+    const sourcePath = path.join(
+      __dirname,
+      '..',
+      'src',
+      'components',
+      'OverdueBanner.tsx',
+    );
+    source = fs.readFileSync(sourcePath, 'utf8');
+  });
+
+  it('does NOT define MAKEUP_ALERT_TITLE / MAKEUP_ALERT_MESSAGE / MAKEUP_ALERT_OK_LABEL constants', () => {
+    // 升级前 3 个 placeholder 常量必须消失
+    expect(source).not.toMatch(/MAKEUP_ALERT_TITLE\s*=/);
+    expect(source).not.toMatch(/MAKEUP_ALERT_MESSAGE\s*=/);
+    expect(source).not.toMatch(/MAKEUP_ALERT_OK_LABEL\s*=/);
+  });
+
+  it('does NOT call Alert.alert inside the component (placeholder gone)', () => {
+    // 升级前:Alert.alert(MAKEUP_ALERT_TITLE, MAKEUP_ALERT_MESSAGE, [...]) 必须消失
+    // 防御:组件内不允许直接弹 Alert(展示层职责)— 反馈走父层 onMakeUp
+    // 简单做法:组件函数体内不出现 Alert.alert 调用
+    expect(source).not.toMatch(/Alert\.alert\s*\(/);
+  });
+
+  it('does NOT import Alert from react-native (no usage after T-US006)', () => {
+    // Alert import 应随 placeholder 删除一起移除 — 防御:后续重构不再 import 回归
+    expect(source).not.toMatch(/import\s*\{[^}]*\bAlert\b[^}]*\}\s*from\s*['"]react-native['"]/);
+  });
+
+  it('handleMakeUpPress is a useCallback that only calls onMakeUp() (transparent delegation)', () => {
+    // T-US006 简化:handleMakeUpPress = useCallback(() => onMakeUp(), [onMakeUp])
+    // 防御:handler 必须 useCallback 包装(同 memo 父组件 onMakeUp 引用变化才更新),
+    // 必须单行 body 仅调 onMakeUp()(不引入额外副作用)
+    expect(source).toMatch(
+      /handleMakeUpPress\s*=\s*useCallback\(\s*(?:\([^)]*\))?\s*:\s*void\s*=>\s*\{\s*onMakeUp\(\s*\)\s*;?\s*\}\s*,\s*\[onMakeUp\]\s*\)/,
+    );
+  });
+
+  it('placeholder Alert literal "补卡功能等 T-US006 接入" is removed from source', () => {
+    // 防御:具体 placeholder 文案不能残留(防止后续重构被误读为"还在 placeholder 阶段")
+    expect(source).not.toContain('补卡功能等 T-US006 接入');
+  });
+});

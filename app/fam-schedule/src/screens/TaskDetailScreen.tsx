@@ -1,8 +1,8 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4 + T-US014-2
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4 + T-US014-2 + T-US006
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成
- *       + US-014 故事 2/2 — 详情页过期 banner):
+ *       + US-006 故事 1/2 — 漏打卡补救 + US-014 故事 2/2 — 详情页过期 banner):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 渲染 task-detail-v1.0.md §3.1 布局的**简化版**:
@@ -23,6 +23,9 @@
  *      - checked_in(我先完成):no toast(乐观 UI 自动切到 completed 态)
  *      - spouse_completed(配偶先完成):Alert "配偶已先一步完成",body "由配偶于 HH:MM 完成"
  *      - failed:Alert "打卡失败" + 翻译 reason
+ *   7. **T-US006 新增**:handleMakeUp → CheckInService.checkin(taskId, isMakeup=true) +
+ *      3 status 反馈(补卡成功 / 配偶已先一步完成 / 补卡失败)— 通过 OverdueBanner onMakeUp
+ *      触发(详情页顶部 banner 上的"补卡"按钮)
  *
  * 设计依据:
  *   - 任务 detail-v1.0.md §3.1 / §3.2 / §3.4 / §6 文案 / §7 a11y
@@ -44,8 +47,13 @@
  *                    AppState 切换处理(后台 → unsubscribe / 前台 → resubscribe)。
  *   - ✅ **T-US014-2**:过期 banner — formatOverdueHours 派生 showBanner + displayText,
  *                    与 computeTaskBadge.overdue 同源(共享 task_date < today / !cancelled /
- *                    !completed_at 三态排除)保证 banner 与 TaskCard 红 chip / 红竖条视觉同步;
- *                    补卡按钮 placeholder Alert(留 T-US006 真补卡 RPC)
+ *                    !completed_at 三态排除)保证 banner 与 TaskCard 红 chip / 红竖条视觉同步
+ *   - ✅ **T-US006**:真补卡 RPC — handleMakeUp 调 CheckInService.checkin(taskId, true),
+ *                    走 SyncManager.enqueueAndApply 触发 RPC `checkin_task(p_is_makeup=true)`;
+ *                    3 status 分支:
+ *                      - checked_in        → Alert "补卡成功"
+ *                      - spouse_completed  → Alert "配偶已先一步完成" (复用 mapCheckInResultToToast)
+ *                      - failed            → Alert "补卡失败" + mapCheckInFailureReason
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
@@ -72,8 +80,20 @@
  *   - 渲染于 ScrollView 顶部 TaskHero 之上,showBanner=true 才输出 OverdueBanner 组件
  *   - 与 computeTaskBadge.overdue kind 同源(共享 task_date < today / !cancelled / !completed_at 三态排除)
  *     保证 banner 与 TaskCard 红 chip / 红竖条视觉同步
- *   - "补卡"按钮 onMakeUp 当前 noop(OverdueBanner 内部 Alert placeholder 提示用户;
- *     真补卡 RPC 留 T-US006 接 checkin_task p_is_makeup=true)
+ *   - "补卡"按钮 onMakeUp 当前 noop(留 T-US006 接 checkin_task p_is_makeup=true)
+ *     — **T-US006 已完成**(handleMakeUp 替代 noop placeholder)
+ *
+ * T-US006 行为:
+ *   - **handleMakeUp**(useCallback 抽到组件体外,便于 React.memo 子组件引用稳定):
+ *     调 CheckInService.checkin(taskArg.id, true)— 走 SyncManager.enqueueAndApply
+ *     乐观更新(同步刷 is_makeup)+ 入队 + 在线即触发 RPC `checkin_task(p_is_makeup=true)`
+ *   - **3 status 分支**(与 handleCheckIn 同结构,文案对齐):
+ *     - checked_in        → Alert "补卡成功" + 任务标 is_makeup(乐观 UI 自动)
+ *     - spouse_completed  → Alert "配偶已先一步完成"(复用 mapCheckInResultToToast 文案 —
+ *                          减少文案分裂;此处只复用 title,body 含时间)
+ *     - failed            → Alert "补卡失败" + mapCheckInFailureReason(reason)
+ *                          (涵盖 task_not_found / cancelled 等 deadline-aware reason)
+ *   - 文案翻译走 mapCheckInResultToToast(result, taskArg.title)(与 handleCheckIn 一致)
  *
  * a11y(任务 detail-v1.0 §7):
  *   - 任务标题 `accessibilityRole="header"`
@@ -156,6 +176,10 @@ const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';
 
 /** T-US005-1:打卡失败 Alert 标题 */
 const CHECKIN_FAILED_TITLE = '打卡失败';
+/** T-US006:补卡成功 Alert 标题 */
+const MAKEUP_OK_TITLE = '补卡成功';
+/** T-US006:补卡失败 Alert 标题 */
+const MAKEUP_FAILED_TITLE = '补卡失败';
 /** T-US005-2:配偶先完成 Alert / 失败 Alert 按钮 label */
 const CHECKIN_OK_LABEL = '好';
 
@@ -327,6 +351,60 @@ export function TaskDetailScreen(): React.JSX.Element {
     [],
   );
 
+  /**
+   * 真补卡回调 — T-US006 — 详情页 OverdueBanner "补卡"按钮点击触发。
+   *
+   * 行为(任务 brief §C.6):
+   *   - 调 CheckInService.checkin(task.id, true)— isMakeup=true 走 RPC
+   *     `checkin_task(p_is_makeup=true)`,由 SyncManager.enqueueAndApply 触发:
+   *       a) applyOptimisticUpdate:LocalStore.tasks 立即标 completed_at(now)
+   *          + 标 is_makeup=true(用户视觉:CheckInButton displayText = '✓ 补打卡')
+   *       b) enqueueMutation:写入 AsyncStorage FIFO queue(离线补卡友好)
+   *       c) isOnline → 立即 replayQueue:executeOnServer → supabase.rpc('checkin_task',
+   *          { p_task_id: taskId, p_is_makeup: true })
+   *   - CheckInService.checkin 在 T-US005-2 后返回 3 种 status:
+   *     a) 'checked_in'        — 我先完成 — Alert "补卡成功"(乐观 UI 自动)
+   *     b) 'spouse_completed'  — 配偶先 done — Alert "配偶已先一步完成"
+   *                              (复用 mapCheckInResultToToast 文案,减少文案分裂)
+   *     c) 'failed'            — pre-check 失败 — Alert "补卡失败" + 翻译 reason
+   *                              (覆盖 task_not_found / cancelled / no_family / 等
+   *                              — 自动满足"补卡已过截止 / 已关闭" 提示需求)
+   *
+   * 与 handleCheckIn 差异:
+   *   - 入参 isMakeup=true(RPC 端 checkin_task 会标 is_makeup=true)
+   *   - 标题文案差异("打卡" → "补卡"),body 文案共用
+   *   - 不接 taskArg 入参(从 closure 拿 task)— JSX 直接 `onMakeUp={handleMakeUp}`
+   *     保证 React.memo 子组件引用稳定
+   *
+   * 简化决策:
+   *   - ❌ 不做撤销补卡入口(留后续)— 补卡后 CheckInButton 仍可走 UndoChip 撤销打卡本身
+   *   - ❌ 不做 iOS Toast(留 T-FIX-06 polish)— 当前 Alert 跨平台一致
+   */
+  const handleMakeUp = useCallback(
+    async (): Promise<void> => {
+      if (!task) return;
+      const result = await CheckInService.checkin(task.id, true);
+      if (result.status === 'spouse_completed') {
+        const msg = mapCheckInResultToToast(result, task.title);
+        Alert.alert(msg.title, msg.body, [{ text: CHECKIN_OK_LABEL, style: 'default' }]);
+      } else if (result.status === 'failed') {
+        Alert.alert(
+          MAKEUP_FAILED_TITLE,
+          mapCheckInFailureReason(result.reason),
+          [{ text: CHECKIN_OK_LABEL, style: 'default' }],
+        );
+      } else if (result.status === 'checked_in') {
+        // 补卡成功 — 乐观 UI 自动切到 completed + is_makeup 视觉(CheckInButton displayText='✓ 补打卡')
+        Alert.alert(
+          MAKEUP_OK_TITLE,
+          mapCheckInResultToToast(result, task.title).body,
+          [{ text: CHECKIN_OK_LABEL, style: 'default' }],
+        );
+      }
+    },
+    [task],
+  );
+
   // -------------------------------------------------------------------------
   // T-US014-2: 过期 banner 派生
   // -------------------------------------------------------------------------
@@ -472,11 +550,7 @@ export function TaskDetailScreen(): React.JSX.Element {
           {overdueInfo?.showBanner ? (
             <OverdueBanner
               message={overdueInfo.displayText}
-              onMakeUp={() => {
-                // 本任务 placeholder:OverdueBanner 内部 Alert 提示"补卡功能等 T-US006 接入"
-                // 真正的补卡 RPC(checkin_task p_is_makeup=true)留 T-US006
-                // 父层 handler 当前 noop — 留 hook 位置给后续 T-US006 接入
-              }}
+              onMakeUp={handleMakeUp}
             />
           ) : null}
 

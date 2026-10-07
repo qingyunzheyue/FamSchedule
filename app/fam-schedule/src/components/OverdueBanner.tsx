@@ -1,11 +1,11 @@
 /**
- * OverdueBanner — 任务详情页过期 banner — T-US014-2
+ * OverdueBanner — 任务详情页过期 banner — T-US014-2 + T-US006
  *
  * 职责(任务 brief §C.2 + 设计 task-detail-v1.0 §3.2):
  *   - 详情页顶部条件渲染 — 仅当 task 处于过期未完成态时显示
  *   - 视觉:warning 浅底 #FBEAE6 + warning 文字 #C95444,圆角 12px
  *   - 三栏布局:左 ⚠ icon + 中文案("已过期 N 小时" / "刚刚过期" / "已过期 N 天")
- *           + 右"补卡"按钮(本任务 Alert placeholder,留 T-US006 真补卡 RPC)
+ *           + 右"补卡"按钮(透传 onMakeUp 给父层 — T-US006 真补卡 RPC)
  *   - a11y:`accessibilityRole="alert"` + label 综合 message + 补卡 action
  *
  * 设计依据:
@@ -13,7 +13,9 @@
  *   - 设计 warning 色 token 已对齐 TaskCard.tsx(COLOR_WARNING / COLOR_WARNING_BG)
  *
  * 边界决策(dev self-acknowledge scope):
- *   - ❌ 真补卡逻辑(留 T-US006)— 当前 onMakeUp Alert "补卡功能等 T-US006 接入"
+ *   - ✅ **T-US006**:补卡按钮只透传 onMakeUp 给父层(TaskDetailScreen.handleMakeUp),
+ *     由父层调 CheckInService.checkin(taskId, true) + Alert 反馈;本组件保持"纯展示 —
+ *     不知 service"契约,严禁回归到内嵌 Alert
  *   - ❌ 关闭按钮(留后续 polish)— 当前 banner 永久显示直到 task 完成 / 编辑日期
  *   - ❌ 国际化(留 react-i18next)— 当前硬编码中文文案,props.message 接受外部注入
  *
@@ -24,17 +26,16 @@
  *
  * Props 契约:
  *   - message:已本地化的文案(由 formatOverdueHours 派生)— UI 直接渲染
- *   - onMakeUp:点击"补卡"按钮回调 — 父层决定实际行为(本任务 Alert placeholder)
+ *   - onMakeUp:点击"补卡"按钮回调 — 父层(TaskDetailScreen.handleMakeUp)决定实际行为
  *
  * 不在范围:
  *   - ❌ banner 关闭状态(留后续)
- *   - ❌ 真补卡 RPC(留 T-US006)
  *   - ❌ 国际化(留 react-i18next)
  *   - ❌ 模板任务特殊处理(本任务简化版)
  */
 
 import { memo, useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View, Alert } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Warning } from 'phosphor-react-native';
 import { useTheme } from 'tamagui';
 
@@ -54,11 +55,6 @@ const COLOR_TEXT_ON_WARNING = '#FFFFFF';
 /** "补卡"按钮文案(独立常量便于 i18n) */
 const MAKEUP_BUTTON_LABEL = '补卡';
 
-/** "补卡"功能 placeholder Alert 文本(T-US006 真补卡 RPC 接好后改) */
-const MAKEUP_ALERT_TITLE = '补卡功能';
-const MAKEUP_ALERT_MESSAGE = '补卡功能等 T-US006 接入';
-const MAKEUP_ALERT_OK_LABEL = '好';
-
 // =====================================================================
 // 2. Props
 // =====================================================================
@@ -70,8 +66,8 @@ export interface OverdueBannerProps {
    */
   message: string;
   /**
-   * "补卡"按钮点击回调 — 父层(TaskDetailScreen)决定实际行为。
-   * 当前任务 placeholder:Alert "补卡功能等 T-US006 接入"(留 T-US006 真补卡 RPC)。
+   * "补卡"按钮点击回调 — 父层(TaskDetailScreen.handleMakeUp)决定实际行为。
+   * T-US006 已完成:handler 调 CheckInService.checkin(taskId, true) + Alert 反馈。
    */
   onMakeUp: () => void;
 }
@@ -101,16 +97,15 @@ function OverdueBannerImpl({
   const warningBorder = (theme.warningBorder?.val ?? '#F0C9BD') as string;
 
   // ---------------------------------------------------------------------
-  // Handler
+  // Handler — T-US006: 仅透传 onMakeUp 给父层
   // ---------------------------------------------------------------------
-
+  //
+  // 升级动机(T-US006):
+  //   - 升级前:组件内 Alert.alert placeholder + 透传 onMakeUp(典型"展示层 Alert 陷阱")
+  //   - 升级后:handler 仅调 onMakeUp(),实际补卡 RPC + 失败 Alert 全在父层
+  //     (TaskDetailScreen.handleMakeUp → CheckInService.checkin(taskId, true))
+  //   - 组件保持纯展示 — 不知 service、不弹 Alert(职责单一,便于复用)
   const handleMakeUpPress = useCallback((): void => {
-    // 本任务 placeholder:弹 Alert 告知用户"补卡功能即将推出"
-    // 真补卡 RPC(T-US006)接好后,父层可改 onMakeUp 走 service 而非弹 Alert
-    Alert.alert(MAKEUP_ALERT_TITLE, MAKEUP_ALERT_MESSAGE, [
-      { text: MAKEUP_ALERT_OK_LABEL, style: 'default' },
-    ]);
-    // 透传给父层 hook(给后续真补卡接入留扩展点;本任务父层 handler 通常 noop)
     onMakeUp();
   }, [onMakeUp]);
 
