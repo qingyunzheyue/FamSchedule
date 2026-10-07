@@ -93,6 +93,7 @@ import { canLongPressDeleteTask } from '../lib/longPressDeletePolicy';
 import { TaskService } from '../services/TaskService';
 import { CheckInService } from '../services/CheckInService';
 import { useExpiredTaskCount } from '../hooks/useExpiredTaskCount';
+import { useBannerDismissedUntil } from '../hooks/useBannerDismissedUntil';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -429,20 +430,28 @@ export function HomeScreen(): React.JSX.Element {
   const currentUserIdRef = useRef<string>('');
   currentUserIdRef.current = currentUserId;
 
-  // ---- T-US015-2: 顶部过期 banner 渲染 ----
+  // ---- T-US015-2 + T-US015-4: 顶部过期 banner 渲染 ----
   //
   // 订阅 useExpiredTaskCount(today)→ 拿到 {count, loading};传给 ExpiredTasksBanner:
   //   - count:过期任务总数 — banner 内部 count > 0 时才渲染(0 完全消失)
   //   - loading:首次拉取 / settings 切换时为 true,banner 不渲染(避免 skeleton)
   //   - onPress:整条可点击 — 本任务父层 noop,留 T-US015-3 跳 ExpiredTasksScreen
   //
-  // 留 T-US015-3 范围:
-  //   - ❌ 点击 banner 跳 ExpiredTasksScreen(留 T-US015-3)
-  //   - ❌ Banner 关闭状态持久化(留 T-US015-3)
+  // T-US015-4 增量:
+  //   - useBannerDismissedUntil() 读 AsyncStorage 关闭状态 + 24h 自动重置
+  //   - bannerVisible 三态 gate:count > 0 AND !loading AND !dismissed
+  //   - onDismiss 透传 ExpiredTasksBanner → banner 关闭按钮点击 → 写盘 + 24h 隐藏
+  //   - Realtime 推送 → useExpiredTaskCount 重算 → expiredCount 变 0 → bannerVisible
+  //     自动 false(无需手动 reset,设计上:count=0 时 banner 不渲染,本地存储的
+  //     dismissed_until 不变;用户下次进 app 若仍 dismissed 期间 → banner 仍隐;
+  //     24h 后自动重置)
   //
   // a11y / testID 派生由 ExpiredTasksBanner 内部负责(组件已自带 accessibilityRole="button"
   // + label "你有 N 个任务过期未完成,点击查看" + testID="expired-tasks-banner")。
   const { count: expiredCount, loading: expiredLoading } = useExpiredTaskCount(today);
+  const { dismissed: bannerDismissed, dismiss: handleBannerDismiss } =
+    useBannerDismissedUntil();
+  const bannerVisible = expiredCount > 0 && !expiredLoading && !bannerDismissed;
 
   // 整条 Pressable onPress 回调 — T-US015-3 接路由跳转。
   //
@@ -521,15 +530,21 @@ export function HomeScreen(): React.JSX.Element {
         </Button>
       </XStack>
 
-      {/* T-US015-2 顶部过期 banner(Header 下 / SegmentedTab 上)
-          - banner 内部 count > 0 且 loading=false 才渲染;N=0 完全消失
-          - 整条 onPress 当前 noop(留 T-US015-3 跳 ExpiredTasksScreen) */}
+      {/* T-US015-2 + T-US015-4 顶部过期 banner(Header 下 / SegmentedTab 上)
+          - bannerVisible gate:
+              count > 0 AND !expiredLoading AND !bannerDismissed
+              任一不满足则不渲染(关掉 / loading / 24h 内 dismissed)
+          - 整条 onPress → 跳 ExpiredTasksScreen(T-US015-3)
+          - onDismiss → 关闭按钮点击 → 写 AsyncStorage + 24h 隐藏 */}
       <View style={styles.bannerWrapper}>
-        <ExpiredTasksBanner
-          count={expiredCount}
-          loading={expiredLoading}
-          onPress={handleExpiredBannerPress}
-        />
+        {bannerVisible ? (
+          <ExpiredTasksBanner
+            count={expiredCount}
+            loading={expiredLoading}
+            onPress={handleExpiredBannerPress}
+            onDismiss={handleBannerDismiss}
+          />
+        ) : null}
       </View>
 
       {/* SegmentedTab —— view switcher */}

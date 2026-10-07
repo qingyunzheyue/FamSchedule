@@ -22,6 +22,9 @@ import {
   clearQueue,
   getQueueLength,
   _clearAllForTests,
+  getBannerDismissedUntil,
+  setBannerDismissedUntil,
+  BANNER_DISMISSED_UNTIL_KEY,
 } from '../src/lib/LocalStore';
 
 beforeEach(async () => {
@@ -140,5 +143,45 @@ describe('LocalStore debug helpers', () => {
     });
     await expect(_clearAllForTests()).resolves.toBeUndefined();
     expect(await getQueueLength()).toBe(0);
+  });
+});
+
+// =====================================================================
+// T-US015-4: banner 关闭状态 AsyncStorage 接口
+// =====================================================================
+
+describe('LocalStore banner dismissed_until (T-US015-4)', () => {
+  it('BANNER_DISMISSED_UNTIL_KEY 是稳定的 AsyncStorage key 字符串', () => {
+    // 锁单一来源 — useBannerDismissedUntil hook 与测试都引用同一常量
+    expect(BANNER_DISMISSED_UNTIL_KEY).toBe('banner:dismissed_until');
+  });
+
+  it('getBannerDismissedUntil → null on cold start (从未 dismiss 过)', async () => {
+    // AsyncStorage.clear() 在 beforeEach 已清 — 冷启动返 null
+    const result = await getBannerDismissedUntil();
+    expect(result).toBeNull();
+  });
+
+  it('setBannerDismissedUntil(number) → 写入并 getBannerDismissedUntil 读回', async () => {
+    const ts = 1_700_000_000_000;
+    await setBannerDismissedUntil(ts);
+    const result = await getBannerDismissedUntil();
+    expect(result).toBe(ts);
+  });
+
+  it('setBannerDismissedUntil(null) → 清空(removeItem),后续读返 null', async () => {
+    // 先写
+    await setBannerDismissedUntil(1_700_000_000_000);
+    expect(await getBannerDismissedUntil()).toBe(1_700_000_000_000);
+    // 再清
+    await setBannerDismissedUntil(null);
+    expect(await getBannerDismissedUntil()).toBeNull();
+  });
+
+  it('_clearAllForTests also clears banner dismissed_until key', async () => {
+    await setBannerDismissedUntil(1234567890);
+    expect(await getBannerDismissedUntil()).toBe(1234567890);
+    await _clearAllForTests();
+    expect(await getBannerDismissedUntil()).toBeNull();
   });
 });

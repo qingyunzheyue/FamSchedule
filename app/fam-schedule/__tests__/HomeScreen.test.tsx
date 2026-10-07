@@ -23,6 +23,9 @@
  *     (expo-router / tamagui / phosphor / context 等)
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 import type { Task } from '../src/lib/LocalStore';
 import {
   canLongPressDeleteTask,
@@ -143,5 +146,55 @@ describe('HomeScreen.canLongPressDeleteTask (T-FIX-06-A M08/M09 pre-check)', () 
     expect(decisions.has('ok')).toBe(true);
     expect(decisions.has('template')).toBe(true);
     expect(decisions.has('spouse_done')).toBe(true);
+  });
+});
+
+// =====================================================================
+// 2. T-US015-4: useBannerDismissedUntil hook 集成 + 条件渲染 gate
+// =====================================================================
+
+describe('HomeScreen — T-US015-4 banner dismissed_until integration (verify-by-source)', () => {
+  let source: string;
+
+  beforeAll(() => {
+    const homePath = path.join(
+      __dirname,
+      '..',
+      'src',
+      'screens',
+      'HomeScreen.tsx',
+    );
+    source = fs.readFileSync(homePath, 'utf8');
+  });
+
+  it('imports useBannerDismissedUntil hook from canonical path', () => {
+    expect(source).toMatch(
+      /import\s*\{[^}]*useBannerDismissedUntil[^}]*\}\s*from\s*['"]\.\.\/hooks\/useBannerDismissedUntil['"]/,
+    );
+  });
+
+  it('destructures {dismissed, dismiss} from useBannerDismissedUntil', () => {
+    // hook 返回 {dismissed, loadingDismiss, dismiss, reset};HomeScreen 至少用
+    // dismissed + dismiss(reset 留后续 Realtime count 变化主动重置用)
+    expect(source).toMatch(/useBannerDismissedUntil\s*\(\s*\)/);
+    expect(source).toMatch(/\{\s*dismissed:[^,]+,\s*dismiss:[^}]+\s*\}/);
+  });
+
+  it('bannerVisible 三态 gate:count > 0 AND !expiredLoading AND !dismissed', () => {
+    // bannerVisible 表达式包含三个条件
+    expect(source).toMatch(
+      /bannerVisible[\s\S]{0,200}expiredCount\s*>\s*0[\s\S]{0,100}![\s\S]*?expiredLoading[\s\S]{0,100}![\s\S]*?dismissed/,
+    );
+  });
+
+  it('passes onDismiss callback to ExpiredTasksBanner', () => {
+    // 关闭按钮回调 = useBannerDismissedUntil.dismiss 透传给 banner
+    expect(source).toMatch(/onDismiss\s*=\s*\{[^}]*handleBannerDismiss[^}]*\}/);
+  });
+
+  it('conditionally renders ExpiredTasksBanner (bannerVisible gate)', () => {
+    // 不再无条件 <ExpiredTasksBanner /> — 必须用 {bannerVisible ? <.../> : null}
+    expect(source).toMatch(/bannerVisible\s*\?\s*\(/);
+    expect(source).toMatch(/<ExpiredTasksBanner[\s\S]*?\/>/);
   });
 });

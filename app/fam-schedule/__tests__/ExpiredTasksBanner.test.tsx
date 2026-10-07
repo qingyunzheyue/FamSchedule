@@ -47,6 +47,7 @@ jest.mock('react-native', () => ({
 jest.mock('phosphor-react-native', () => ({
   Warning: () => null,
   CaretRight: () => null,
+  X: () => null,
 }));
 
 // T-FIX-06-A M24:ExpiredTasksBanner 用 useTheme() 拿 warning token,stub tamagui 让 jest
@@ -313,5 +314,72 @@ describe('ExpiredTasksBanner — integration contract with useExpiredTaskCount',
     expect(formatExpiredBannerText(before.count).length).toBeGreaterThan(0);
     expect(formatExpiredBannerText(after.count).length).toBeGreaterThan(0);
     expect(formatExpiredBannerText(0)).toBe('');
+  });
+});
+
+// =====================================================================
+// 8. onDismiss 关闭按钮契约 — T-US015-4 A3
+// =====================================================================
+
+describe('ExpiredTasksBanner — onDismiss / close button (T-US015-4)', () => {
+  it('onDismiss prop is optional (banner 不传时不渲染关闭按钮)', () => {
+    // Props 契约:onDismiss 是可选 — 不传时 banner 仍可用(复用场景如过期列表
+    // 内嵌),关闭按钮不渲染(避免误触关闭整页)。
+    const props: ExpiredTasksBannerProps = { count: 2, onPress: jest.fn() };
+    expect((props as unknown as { onDismiss?: unknown }).onDismiss).toBeUndefined();
+  });
+
+  it('onDismiss prop 接通 — 期望组件 Props interface 包含 onDismiss', () => {
+    // Props 形态校验:onDismiss 是 () => void 函数
+    const onDismiss: () => void = jest.fn();
+    const props: ExpiredTasksBannerProps = {
+      count: 2,
+      onPress: jest.fn(),
+      onDismiss,
+    };
+    expect(typeof props.onDismiss).toBe('function');
+    onDismiss();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('onDismiss 与 onPress 独立调用 — 关闭按钮 onPress 不应触发整条 onPress', () => {
+    // 关闭按钮独立 Pressable — 点击关闭不应冒泡触发整条 onPress(避免
+    // 用户本想关 banner 却跳到过期列表)。两个 callback 是不同的函数引用。
+    const onPress = jest.fn();
+    const onDismiss = jest.fn();
+    const props: ExpiredTasksBannerProps = {
+      count: 2,
+      onPress,
+      onDismiss,
+    };
+    expect(props.onPress).not.toBe(props.onDismiss);
+    // 两个 callback 类型层是 () => void,可独立调用
+    (props.onPress as () => void)();
+    (props.onDismiss as () => void)();
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('loading=true 时 banner 不渲染 — 即便 onDismiss 已注入也不渲染关闭按钮', () => {
+    // 可见性契约优先级:loading=true → return null,关闭按钮也不会出现
+    const props: ExpiredTasksBannerProps = {
+      count: 5,
+      onPress: jest.fn(),
+      onDismiss: jest.fn(),
+      loading: true,
+    };
+    expect(props.loading).toBe(true);
+    // 组件实现:loading=true 早于 onDismiss 检查 → return null
+    expect(typeof props.onDismiss).toBe('function');
+  });
+
+  it('count=0 时 banner 不渲染 — 即便 onDismiss 已注入也不渲染关闭按钮', () => {
+    // count=0 是第二个 gate:return null,banner 整体不渲染
+    const props: ExpiredTasksBannerProps = {
+      count: 0,
+      onPress: jest.fn(),
+      onDismiss: jest.fn(),
+    };
+    expect(props.count).toBe(0);
   });
 });

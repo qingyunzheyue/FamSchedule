@@ -56,7 +56,12 @@ const EMPTY_COPY: Readonly<Record<ViewMode, { title: string; sub: string }>> = {
 
 interface EmptyStateProps {
   view: ViewMode;
-  onCreatePress: () => void;
+  /**
+   * T-US015-4:onCreatePress 改为可选 — 过期/历史/搜索等语境化空状态不需要
+   * "创建任务"按钮(留 Home 主屏 Header 的 + 按钮)。不传时不渲染按钮,
+   * EmptyState 退化为纯文字提示。
+   */
+  onCreatePress?: () => void;
 }
 
 function EmptyState({ view, onCreatePress }: EmptyStateProps): React.JSX.Element {
@@ -69,17 +74,19 @@ function EmptyState({ view, onCreatePress }: EmptyStateProps): React.JSX.Element
     >
       <Text style={styles.emptyTitle}>{copy.title}</Text>
       <Text style={styles.emptySub}>{copy.sub}</Text>
-      <Button
-        theme="active"
-        size="$md"
-        marginTop="$lg"
-        icon={<Plus size={20} color="#FFFFFF" weight="bold" />}
-        onPress={onCreatePress}
-        accessibilityLabel="创建任务"
-        testID="empty-create-button"
-      >
-        创建任务
-      </Button>
+      {onCreatePress ? (
+        <Button
+          theme="active"
+          size="$md"
+          marginTop="$lg"
+          icon={<Plus size={20} color="#FFFFFF" weight="bold" />}
+          onPress={onCreatePress}
+          accessibilityLabel="创建任务"
+          testID="empty-create-button"
+        >
+          创建任务
+        </Button>
+      ) : null}
     </View>
   );
 }
@@ -116,7 +123,11 @@ export interface TaskListProps {
    * CheckInButton 不渲染 UndoChip,回到 T-US005-2 视觉)。
    */
   onTaskUndo?: (task: Task) => void | Promise<void>;
-  onCreatePress: () => void;
+  /**
+   * T-US015-4:可选。空状态时的"创建任务"按钮回调 — 不传时按钮不渲染
+   * (过期列表 / 历史 / 搜索结果等语境化空态不需要"顺手新建"按钮)。
+   */
+  onCreatePress?: () => void;
 }
 
 /**

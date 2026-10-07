@@ -1,12 +1,13 @@
 /**
- * ExpiredTasksScreen — 过期任务列表屏 — T-US015-3
+ * ExpiredTasksScreen — 过期任务列表屏 — T-US015-3 + T-US015-4
  *
  * 职责(US-015 故事 3/3 — 端到端收尾:点击 banner 进入完整过期列表):
  *   1. 渲染 Header:左返回按钮 + 中"过期任务"标题 + 右占位
  *   2. 读 family_settings.expiry_window → getExpiredTasksSummary(familyId, tasks, today)
  *      → window state(filterExpiredTasks 输入)
  *   3. 派生 useMemo(tasks, window, today) → filterExpiredTasks → 已排序的过期列表
- *   4. 复用 TaskList 渲染(TaskList 自带 TaskCard + EmptyState + RefreshControl)
+ *   4. N>0 时复用 TaskList 渲染(TaskList 自带 TaskCard + RefreshControl)
+ *      N=0 时用 EmptyState 渲染过期上下文文案(不进 TaskList 内嵌 EmptyState)
  *   5. 复用 HomeScreen 已有 handle 模式:
  *      - handleTaskCheckIn → CheckInService.checkin(taskId, isMakeup=true)
  *        (T-US015-3 范围:过期列表里的 task 调 isMakeup=true 走补卡路径)
@@ -14,6 +15,11 @@
  *      - handleTaskPress → router.push 到 task/[id]
  *   6. family 上下文变化 / tasks 推送 / today 跨日 → 自动重算 expired 列表
  *      (useTasks 订阅 + useFamilyValue 触发 effect)
+ *   7. **T-US015-4 增量**:
+ *      - EmptyState polish:N=0 改用过期上下文文案"暂无过期任务"
+ *        + subtitle "保持节奏,真棒",不再用 TaskList view="today" 错配的
+ *        "今天没有任务" + "创建任务"按钮(过期列表不应允许顺手新建)
+ *      - 下拉刷新 RefreshControl 接 SyncManager.pullSince(本屏接 onRefresh)
  *
  * 设计依据:
  *   - 设计 home-v1.0 §3.3 过期 banner + §3.5 任务列表卡片视觉
@@ -28,16 +34,25 @@
  *     (filterExpiredTasks 派生)
  *   - fallback:'yesterday_today'(同 useExpiredTaskCount,同 ExpiryService)
  *
- * 设计决策(EmptyState 文案):
- *   - 复用 TaskList 内部 EmptyState — TaskList 接受 view='today'|'week'|'all',
- *     当前 ExpiredTasksScreen 没有"view"概念(只有 window),用 view='today' 占位
- *     让 EmptyState 文案 fallback 到"今天没有任务"。后续 T-US015-4 polish 可
- *     改 TaskList EmptyState 接受自定义文案,但本任务严格 scope **不**改 TaskList
- *     (留在 _layout.tsx 等同路线禁止改的文件清单外)。
- *   - 防御:N=0 时虽然走 TaskList EmptyState 文案是"今天没有任务",但本屏是
- *     "过期任务列表"语境;这里依赖 UI 反馈给用户:无过期任务本身就是空集合,
- *     文案"今天没有任务"在过期语境下不算明显错(用户已点 banner 进入,期待
- *     "看到自己的过期任务" — 空态已是状态信号)。完整文案重做留 T-US015-4 polish。
+ * 设计决策(EmptyState 文案 — T-US015-4 polish):
+ *   - **N=0 不再用 TaskList view="today" 占位复用**(以前会显示"今天没有任务" + "创建任务"按钮
+ *     与过期列表语境严重错配)— 改为独立 <EmptyState icon title subtitle />:
+ *       - icon: <CheckCircle /> — 隐喻"无过期任务,安心"
+ *       - title: "暂无过期任务"
+ *       - subtitle: "保持节奏,真棒"
+ *   - handleCreatePress 已删除 — 过期列表不应允许"顺手新建",过期/历史上下文
+ *     应纯净,新建入口保留在 Home 主屏 header。
+ *   - 复用 src/components/EmptyState.tsx(presentational)— 通用,后续搜索结果 / 归档
+ *     屏也可复用。
+ *
+ * 设计决策(下拉刷新 — T-US015-4 C):
+ *   - ScrollView 包 TaskList → FlatList 嵌套会触发 RN 警告 — 改用 TaskList 自带
+ *     RefreshControl + onRefresh 走 SyncManager.pullSince(lastSyncAt)(onRefresh 已
+ *     在 T-US015-3 占位为 noop,本任务接通 pullSince)
+ *   - 失败策略同 HomeScreen:throw → Alert "网络异常";status.ok=false → Alert "同步未完成";
+ *     finally setRefreshing(false)
+ *   - 不再走 useSyncManager 自动 pullSince 的双触发(避免重叠请求)—— 下拉时主动 pullSince
+ *     即可,Realtime 推送仍由 SyncManager 兜底
  *
  * 设计决策(补卡语义):
  *   - T-US006 真补卡 RPC 是后续任务(留 T-US006)— 当前 task 在过期列表里
@@ -55,12 +70,11 @@
  * 复用约定:
  *   - TaskCard 渲染:复用现有 TaskList → TaskCard 链
  *   - CheckInButton 渲染:复用现有 TaskCard → CheckInButton 链
- *   - EmptyState:复用 TaskList 内部 EmptyState(留 T-US015-4 polish 文案)
+ *   - EmptyState:用 src/components/EmptyState.tsx 通用组件(语境化文案)
  *   - 撤销 UndoChip:复用 TaskCard → CheckInButton → UndoChip 链
  *
  * 不在本屏范围(留后续任务):
- *   - ❌ Banner 关闭状态持久化(T-US015-4)
- *   - ❌ EmptyState 自定义文案(对齐"暂无过期任务"语义)— T-US015-4 polish
+ *   - ❌ Banner 关闭状态持久化(HomeScreen 完成 T-US015-4)
  *   - ❌ 真补卡 RPC(T-US006)— 本任务复用现有 checkin(... true) 占位
  *   - ❌ 过期任务批量操作(全部打卡 / 一键撤销)— 留后续
  *   - ❌ 过期窗口设置 UI(T-US017-3)
@@ -70,7 +84,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View, Text, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Text as TamaguiText, XStack, YStack } from 'tamagui';
-import { CaretLeft } from 'phosphor-react-native';
+import { CaretLeft, CheckCircle } from 'phosphor-react-native';
 
 import { useTasks } from '../hooks/useTasks';
 import { useFamilyValue, useCurrentUserId } from '../contexts/FamilyContext';
@@ -80,6 +94,7 @@ import {
   type ExpiryWindow,
 } from '../services/ExpiryService';
 import { TaskList } from '../components/TaskList';
+import { EmptyState } from '../components/EmptyState';
 import { CheckInService } from '../services/CheckInService';
 import {
   mapCheckInFailureReason,
@@ -87,6 +102,8 @@ import {
   mapCheckInResultToToast,
 } from '../lib/createTaskForm';
 import { showConfirmDialog } from '../components/ConfirmDialog';
+import { pullSince, type PullStatus } from '../lib/SyncManager';
+import { getLastSyncAt } from '../lib/LocalStore';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -107,6 +124,16 @@ const ALERT_UNDO_FAILED_TITLE = '撤销失败';
 const ALERT_UNDO_FAILED_OK_LABEL = '好';
 const SPOUSE_COMPLETED_OK_LABEL = '知道了';
 const SPOUSE_COMPLETED_DISMISS_LABEL = '关闭';
+
+// T-US015-4 C:下拉刷新失败文案 — 与 HomeScreen 保持一致
+const ALERT_SYNC_TITLE = '同步未完成';
+const ALERT_SYNC_MESSAGE = '部分数据未拉到,稍后会自动重试';
+const ALERT_NETWORK_TITLE = '网络异常';
+const ALERT_NETWORK_MESSAGE = '请检查网络连接后下拉刷新';
+
+// T-US015-4 B:EmptyState 文案 — 过期上下文
+const EMPTY_TITLE = '暂无过期任务';
+const EMPTY_SUBTITLE = '保持节奏,真棒';
 
 const DEFAULT_EXPIRY_WINDOW: ExpiryWindow = 'yesterday_today';
 
@@ -273,13 +300,36 @@ export function ExpiredTasksScreen(): React.JSX.Element {
     [],
   );
 
-  // ---- 创建任务按钮(EmptyState 回调)— 跳 task-create 路由 ----
+  // ---- T-US015-4 C:下拉刷新接 SyncManager.pullSince ----
   //
-  // TaskList EmptyState 在 N=0 时显示"创建任务"按钮;过期列表下用户主要来
-  // 自 home banner 点击,创建按钮允许"顺手新建"
-  const handleCreatePress = useCallback((): void => {
-    router.push('/(main)/(home)/task-create');
-  }, [router]);
+  // 过期列表默认依赖 Realtime 推送 + useTasks 订阅被动刷新;用户主动下拉时
+  // 走 pullSince(lastSyncAt) 增量拉取增量,失败弹 Alert。
+  // 设计决策:不调 useSyncManager(它内部已自动 subscribe + initial pullSince;
+  //          下拉只需主动增量拉,避免重叠请求)。
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const lastSyncAt = await getLastSyncAt();
+      const status: PullStatus = await pullSince(lastSyncAt);
+      if (!status.ok) {
+        Alert.alert(ALERT_SYNC_TITLE, ALERT_SYNC_MESSAGE);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[ExpiredTasksScreen] onRefresh failed:', e);
+      Alert.alert(ALERT_NETWORK_TITLE, ALERT_NETWORK_MESSAGE);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  // ---- 创建任务按钮(EmptyState 回调)— 已删除 T-US015-4 ----
+  //
+  // 原 TaskList view="today" 占位复用导致过期 N=0 时显示"创建任务"按钮,与
+  // 过期列表语境严重错配。T-US015-4 polish 改用 EmptyState 通用组件 + 过期
+  // 文案,过期列表不允许"顺手新建";新建入口保留在 Home 主屏 header。
+  // 留作历史注释,避免后续重构又加回来。
 
   // ---- 渲染:family loading 防御 ----
   if (!familyValue) {
@@ -348,25 +398,31 @@ export function ExpiredTasksScreen(): React.JSX.Element {
         </Text>
       </XStack>
 
-      {/* TaskList 复用 — TaskCard + EmptyState(自带) + 下拉刷新(本屏简化不接 onRefresh) */}
-      {/*
-        下拉刷新本任务不接 onRefresh — 过期列表来源 = useTasks() 订阅的 SyncManager.tasksSnapshot
-        本来就 Realtime 推送兜底;onRefresh 需要 lastSyncAt + pullSince 全链(超出本任务 scope)
-        留 T-US015-4 polish 接 pullSince 增强体验
-      */}
-      <TaskList
-        tasks={expired}
-        assigneeLabels={assigneeLabels}
-        today={today}
-        view="today"
-        refreshing={false}
-        onRefresh={() => undefined}
-        onTaskPress={handleTaskPress}
-        onTaskCheckIn={handleTaskCheckIn}
-        onTaskUndo={handleTaskUndo}
-        currentUserId={currentUserId}
-        onCreatePress={handleCreatePress}
-      />
+      {/* T-US015-4 B + C:
+          - N>0 时用 TaskList 渲染 TaskCard;refresh 接 onRefresh → pullSince
+          - N=0 时用 EmptyState(过期上下文文案)— 不再走 TaskList 错配的 view="today"
+          - 移除 onCreatePress:过期列表不允许"顺手新建",新建入口保留在 Home 主屏 */}
+      {expired.length > 0 ? (
+        <TaskList
+          tasks={expired}
+          assigneeLabels={assigneeLabels}
+          today={today}
+          view="today"
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          onTaskPress={handleTaskPress}
+          onTaskCheckIn={handleTaskCheckIn}
+          onTaskUndo={handleTaskUndo}
+          currentUserId={currentUserId}
+        />
+      ) : (
+        <EmptyState
+          icon={<CheckCircle size={48} color={COLOR_PRIMARY} weight="duotone" />}
+          title={EMPTY_TITLE}
+          subtitle={EMPTY_SUBTITLE}
+          testID="expired-tasks-empty"
+        />
+      )}
     </YStack>
   );
 }

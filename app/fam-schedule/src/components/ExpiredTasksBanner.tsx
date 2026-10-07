@@ -1,7 +1,7 @@
 /**
- * ExpiredTasksBanner — Home tab 启动期过期任务 banner — T-US015-2
+ * ExpiredTasksBanner — Home tab 启动期过期任务 banner — T-US015-2 + T-US015-4
  *
- * 职责(US-015 故事 2/3 — 启动时过期任务 banner):
+ * 职责(US-015 故事 2/3 — 启动时过期任务 banner + 故事 4 — 关闭按钮):
  *   1. 渲染顶部 banner — 仅当 count > 0 且 loading=false 时显示
  *   2. 视觉:warning 浅底 #FBEAE6 + warning 文字 #C95444 + 1px 描边 #F0C9BD +
  *      12px 圆角(与 OverdueBanner.tsx 一致的 design token)
@@ -9,16 +9,21 @@
  *      右"查看 →"链接
  *   4. 整条可点击 — onPress 回调(本任务父层 noop,留 T-US015-3 跳转
  *      ExpiredTasksScreen)
- *   5. a11y:`accessibilityRole="button"` + label 综合文案 + "点击查看"
+ *   5. **T-US015-4 新增**:右侧关闭按钮 × — onDismiss 回调,持久化逻辑由
+ *      父层 useBannerDismissedUntil hook 处理;不传 onDismiss 时不渲染关闭按钮
+ *      (banner 复用场景,如 ExpiredTasksScreen 内嵌时关闭按钮隐藏)
+ *   6. a11y:`accessibilityRole="button"` + label 综合文案 + "点击查看"
  *
  * 设计依据:
  *   - 设计 home-v1.0.md §3.3 过期 banner 视觉 + §6 文案
  *   - 设计 §1.1 warning 色 token — 与 TaskCard.tsx / OverdueBanner.tsx 对齐
  *   - 任务 brief §C.3 + §D 测试覆盖
+ *   - T-US015-4 brief §A.3:关闭按钮独立 Pressable,不触发 onPress(两个区域分开)
  *
  * 边界决策(dev self-acknowledge scope):
  *   - ❌ 跳转 ExpiredTasksScreen(留 T-US015-3)— 当前 onPress 父层 noop
- *   - ❌ Banner 关闭状态持久化(留 T-US015-3)— 当前 banner 完全由 count 驱动
+ *   - ❌ Banner 关闭状态持久化(留 T-US015-4 hook)— banner 是纯展示,父层
+ *     注入 dismiss 回调
  *   - ❌ 国际化(留 react-i18next)— 当前硬编码中文文案,formatExpiredBannerText
  *     导出便于未来 i18n 替换
  *   - ❌ 接 Service / 接 useExpiredTaskCount hook(留 caller)— banner 是纯展示,
@@ -29,18 +34,19 @@
  *   - count:必填 number — 过期任务总数;0 = 不渲染
  *   - onPress:可选 () => void — 整条 Pressable 点击回调(本任务父层 noop)
  *   - loading:可选 boolean — true = 不渲染(避免 banner 闪 + 数据不准)
+ *   - onDismiss:可选 () => void — T-US015-4:右侧 × 按钮回调;不传 = 不渲染按钮
  *
  * 不在范围:
  *   - ❌ service / hook 集成
  *   - ❌ 跳转
- *   - ❌ 关闭持久化
+ *   - ❌ 关闭持久化(留父层 hook)
  *   - ❌ i18n
  *   - ❌ 模板任务特殊处理
  */
 
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { CaretRight, Warning } from 'phosphor-react-native';
+import { CaretRight, Warning, X } from 'phosphor-react-native';
 import { useTheme } from 'tamagui';
 
 // =====================================================================
@@ -53,6 +59,10 @@ import { useTheme } from 'tamagui';
 
 /** "查看 →" 链接文案(独立常量便于 i18n) */
 const VIEW_LINK_LABEL = '查看 →';
+/** T-US015-4:关闭按钮 a11y label(独立常量便于 i18n + 测试断言) */
+const DISMISS_BUTTON_LABEL = '关闭过期 banner';
+/** T-US015-4:关闭按钮 testID(便于 E2E / 截图回归) */
+const DISMISS_BUTTON_TESTID = 'expired-tasks-banner-dismiss';
 
 // =====================================================================
 // 2. Props
@@ -76,6 +86,12 @@ export interface ExpiredTasksBannerProps {
    * data ready)。
    */
   loading?: boolean;
+  /**
+   * T-US015-4 新增:关闭按钮回调 — 父层(HomeScreen)useBannerDismissedUntil
+   * 注入,写 AsyncStorage + 更新 state;不传时关闭按钮不渲染(banner 复用
+   * 场景如过期列表内嵌允许不显示关闭按钮)。
+   */
+  onDismiss?: () => void;
 }
 
 // =====================================================================
@@ -125,6 +141,7 @@ function ExpiredTasksBannerImpl({
   count,
   onPress,
   loading,
+  onDismiss,
 }: ExpiredTasksBannerProps): React.JSX.Element | null {
   // T-FIX-06-A M24:warning 系列色从 theme token 拿,跨 light/dark 自动适配
   const theme = useTheme();
@@ -186,6 +203,27 @@ function ExpiredTasksBannerImpl({
         </Text>
         <CaretRight size={14} color={warningFg} weight="bold" />
       </View>
+
+      {/* T-US015-4:右侧关闭按钮 × — 仅当 onDismiss 注入时渲染
+          - 独立 Pressable:点击 × 不应触发整条 onPress(让父层关闭 banner 而不是跳转过期列表)
+          - hitSlop={12}(每边 12dp,总命中区 48x48,等价 iOS HIG 44pt minimum tap area)
+          - testID 暴露给 E2E 截图回归
+      */}
+      {onDismiss ? (
+        <Pressable
+          onPress={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel={DISMISS_BUTTON_LABEL}
+          testID={DISMISS_BUTTON_TESTID}
+          hitSlop={12}
+          style={({ pressed }) => [
+            styles.dismissButton,
+            pressed ? styles.dismissPressed : null,
+          ]}
+        >
+          <X size={18} color={warningFg} weight="bold" />
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }
@@ -241,5 +279,18 @@ const styles = StyleSheet.create({
     // color 由组件 inline 提供(theme.warning token)— T-FIX-06-A M24
     fontSize: 13,
     fontWeight: '600',
+  },
+  // T-US015-4:关闭按钮(×)独立点击区 — 24x24 视觉但 hitSlop 12 让命中区 ≈ 36dp,
+  // 与 banner 整条 Pressable 分开(点击 × 不会冒泡触发 onPress)
+  dismissButton: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+    borderRadius: 12,
+  },
+  dismissPressed: {
+    opacity: 0.5,
   },
 });

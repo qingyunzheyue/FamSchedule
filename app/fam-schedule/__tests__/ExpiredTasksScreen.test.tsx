@@ -358,3 +358,102 @@ describe('ExpiredTasksScreen — header UI contract (T-US015-3)', () => {
     expect(source).not.toMatch(/<ExpiredTasksBanner[\s\S]*?\/>/);
   });
 });
+
+// =====================================================================
+// 8. T-US015-4 B:EmptyState polish — N=0 改用过期上下文文案
+// =====================================================================
+
+describe('ExpiredTasksScreen — EmptyState polish (T-US015-4)', () => {
+  let source: string;
+
+  beforeAll(() => {
+    const sourcePath = path.join(
+      __dirname,
+      '..',
+      'src',
+      'screens',
+      'ExpiredTasksScreen.tsx',
+    );
+    source = fs.readFileSync(sourcePath, 'utf8');
+  });
+
+  it('imports EmptyState component from canonical path', () => {
+    expect(source).toMatch(
+      /import\s*\{[^}]*EmptyState[^}]*\}\s*from\s*['"]\.\.\/components\/EmptyState['"]/,
+    );
+  });
+
+  it('renders EmptyState when expired.length === 0 with expired-context copy', () => {
+    // 条件渲染:expired.length === 0 → <EmptyState ...> 替换 TaskList 占位
+    expect(source).toMatch(/expired\.length\s*>\s*0/);
+    // 过期上下文文案:title "暂无过期任务" + subtitle "保持节奏,真棒"
+    expect(source).toMatch(/暂无过期任务/);
+    expect(source).toMatch(/保持节奏,真棒/);
+  });
+
+  it('uses CheckCircle icon for EmptyState (视觉隐喻:无过期任务,安心)', () => {
+    expect(source).toMatch(/CheckCircle/);
+  });
+
+  it('removes onCreatePress prop (TaskList EmptyState 不再触发"顺手新建")', () => {
+    // T-US015-4 前:TaskList view="today" 占位复用 → 有 onCreatePress
+    // T-US015-4 后:N>0 时 TaskList 不传 onCreatePress(过期列表不允许新建)
+    expect(source).not.toMatch(/onCreatePress\s*=/);
+    // handleCreatePress 函数已删(注释保留作历史)
+    expect(source).not.toMatch(/handleCreatePress\s*=\s*useCallback/);
+  });
+
+  it('no longer uses view="today" as EmptyState placeholder (T-US015-4 polish)', () => {
+    // 防御:不应再以 view="today" 当作过期 N=0 占位 — 那是 T-US015-3 简化
+    // 残留,T-US015-4 polish 后已替换为 EmptyState
+    // 注:TaskList 本身仍接受 view="today"(任务列表 prop)— 但只在 N>0 时才渲染
+    // 检查 N=0 走 EmptyState 分支
+    expect(source).toMatch(/<EmptyState[\s\S]*?\/>/);
+  });
+});
+
+// =====================================================================
+// 9. T-US015-4 C:下拉刷新接 SyncManager.pullSince
+// =====================================================================
+
+describe('ExpiredTasksScreen — pull-to-refresh pullSince integration (T-US015-4)', () => {
+  let source: string;
+
+  beforeAll(() => {
+    const sourcePath = path.join(
+      __dirname,
+      '..',
+      'src',
+      'screens',
+      'ExpiredTasksScreen.tsx',
+    );
+    source = fs.readFileSync(sourcePath, 'utf8');
+  });
+
+  it('imports pullSince + PullStatus from SyncManager + getLastSyncAt from LocalStore', () => {
+    expect(source).toMatch(
+      /import\s*\{[^}]*pullSince[^}]*\}\s*from\s*['"]\.\.\/lib\/SyncManager['"]/,
+    );
+    expect(source).toMatch(
+      /import\s*\{[^}]*getLastSyncAt[^}]*\}\s*from\s*['"]\.\.\/lib\/LocalStore['"]/,
+    );
+  });
+
+  it('wires onRefresh to pullSince(lastSyncAt) with refreshing state', () => {
+    // onRefresh 函数体内:await getLastSyncAt() → pullSince(lastSyncAt) → setRefreshing(false) in finally
+    expect(source).toMatch(/pullSince\s*\(\s*lastSyncAt\s*\)/);
+    expect(source).toMatch(/setRefreshing\s*\(\s*true\s*\)/);
+    expect(source).toMatch(/setRefreshing\s*\(\s*false\s*\)/);
+  });
+
+  it('passes onRefresh + refreshing props to TaskList (when N>0)', () => {
+    expect(source).toMatch(/onRefresh\s*=\s*\{onRefresh\}/);
+    expect(source).toMatch(/refreshing\s*=\s*\{refreshing\}/);
+  });
+
+  it('shows Alert when pullSince status.ok=false or throws (failure UX)', () => {
+    // 失败文案同 HomeScreen,锁定以保证 跨屏一致
+    expect(source).toMatch(/同步未完成/);
+    expect(source).toMatch(/网络异常/);
+  });
+});

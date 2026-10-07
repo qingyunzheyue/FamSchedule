@@ -60,13 +60,19 @@ export type PendingMutation =
 //   - cache:* — 镜像 server 数据的本地副本(可整体覆盖)
 //   - queue:* — 客户端待执行的写队列(FIFO,append-only + drain 全清)
 //   - meta:* — 同步元数据(时间戳、游标等)
+//   - banner:* — 通知/banner 关闭状态持久化(unixtime ms,过了自动重置)
 const KEYS = {
   tasks: 'cache:tasks',
   templates: 'cache:templates',
   settings: 'cache:settings',
   queue: 'queue:pending_mutations',
   lastSyncAt: 'meta:last_sync_at',
+  bannerDismissedUntil: 'banner:dismissed_until',
 } as const;
+
+// T-US015-4:过期 banner 关闭时间戳(unixtime ms)。
+// 导出为 named constant 便于 useBannerDismissedUntil hook + 测试引用同一来源。
+export const BANNER_DISMISSED_UNTIL_KEY = KEYS.bannerDismissedUntil;
 
 // ---- Generic JSON helpers ----
 
@@ -133,6 +139,34 @@ export const getLastSyncAt = (): Promise<number | null> =>
 export const setLastSyncAt = (ts: number): Promise<void> =>
   setJSON(KEYS.lastSyncAt, ts);
 
+// ---- Banner: dismissed_until timestamp ----
+//
+// T-US015-4:过期 banner 关闭状态持久化。
+// - 存 unix ms number(过这个时间点即视为"dismissed 已过期" → 重置)
+// - null = 未 dismissed(从未关过 / 已重置)
+// - hook 端读到这个 timestamp 时跟 `Date.now()` 对比;过期即视为未 dismissed
+//   (无需主动写 null,只需上层比较)。setBannerDismissedUntil(null) 用于显式
+//   reset(留给后续 Realtime count 变化触发自动重置时调用)
+export const getBannerDismissedUntil = (): Promise<number | null> =>
+  getJSON<number | null>(KEYS.bannerDismissedUntil, null);
+
+export const setBannerDismissedUntil = (
+  ts: number | null,
+): Promise<void> => {
+  if (ts === null) {
+    return (async () => {
+      try {
+        await AsyncStorage.removeItem(KEYS.bannerDismissedUntil);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[LocalStore] removeItem(${KEYS.bannerDismissedUntil}) failed:`, e);
+        throw e;
+      }
+    })();
+  }
+  return setJSON(KEYS.bannerDismissedUntil, ts);
+};
+
 // ---- Mutation queue (FIFO) ----
 
 // T-FIX-06-B M05:enqueueMutation + drainQueue 两个 read-modify-write 都不是 atomic。
@@ -194,3 +228,9 @@ export async function getQueueLength(): Promise<number> {
 export async function _clearAllForTests(): Promise<void> {
   await AsyncStorage.multiRemove(Object.values(KEYS));
 }
+
+// ---- Re-exports for banner hooks ----
+//
+// 让 useBannerDismissedUntil hook 不用直接 import KEYS(map 对象)—
+// 通过 named constant 引用单一来源,便于 grep 与重构。
+export { KEYS as _KEYS };
