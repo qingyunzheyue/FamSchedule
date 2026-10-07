@@ -984,7 +984,7 @@ T-US007-1 (本地通知排程)
 - **Risk**: Low
 - **Priority**: P1
 - **Assignee**: frontend-dev
-- **Status**: ⚪ Not Started
+- **Status**: ✅ Done (2026-10-07)
 - **Definition of Done**:
   - 任务详情页"历史"区块显示打卡记录
   - 补卡条目有"补卡"标签
