@@ -32,23 +32,27 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // =====================================================================
+// 共享 source — 在 describe 之前一次性 read,后续 describe 全部复用
+// =====================================================================
+
+let source: string;
+
+beforeAll(() => {
+  const sourcePath = path.join(
+    __dirname,
+    '..',
+    'src',
+    'screens',
+    'TaskDetailScreen.tsx',
+  );
+  source = fs.readFileSync(sourcePath, 'utf8');
+});
+
+// =====================================================================
 // 1. handleMakeUp 骨架契约 — verify-by-source
 // =====================================================================
 
 describe('TaskDetailScreen.handleMakeUp (T-US006 real makeup RPC)', () => {
-  let source: string;
-
-  beforeAll(() => {
-    const sourcePath = path.join(
-      __dirname,
-      '..',
-      'src',
-      'screens',
-      'TaskDetailScreen.tsx',
-    );
-    source = fs.readFileSync(sourcePath, 'utf8');
-  });
-
   // -----------------------------------------------------------------
   // handler 存在性 + 基本形态
   // -----------------------------------------------------------------
@@ -154,5 +158,115 @@ describe('TaskDetailScreen.handleMakeUp (T-US006 real makeup RPC)', () => {
     expect(source).toMatch(
       /import\s*\{[^}]*\bmapCheckInFailureReason\b[^}]*\}\s*from\s*['"]\.\.\/lib\/createTaskForm['"]/,
     );
+  });
+});
+
+// =====================================================================
+// 2. T-US006-2 增量:TaskHistory 替换 HISTORY_PLACEHOLDER + 接入契约
+// =====================================================================
+//
+// 覆盖范围(任务 brief §D.6):
+//   1. HISTORY_PLACEHOLDER 常量 / 字符串 已从源码删除
+//   2. TaskHistory 组件已 import
+//   3. TaskHistory 已在 JSX 中渲染,接 completed_at / completed_by / is_makeup / assigneeLabels
+//   4. assigneeLabels 派生已加(useMemo + familyValue.members 遍历)
+//   5. task.completed_at === null 时 TaskHistory 内部 return null(组件契约)
+
+describe('TaskDetailScreen TaskHistory wiring (T-US006-2 verify-by-source)', () => {
+  // 上面 beforeAll 已 read source,此处复用变量
+
+  // -----------------------------------------------------------------
+  // HISTORY_PLACEHOLDER 清理
+  // -----------------------------------------------------------------
+
+  it('HISTORY_PLACEHOLDER constant has been removed from the file', () => {
+    // 升级前:`const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';` 占位文案
+    // 升级后:删除占位常量,改由 TaskHistory 组件渲染真实打卡记录
+    expect(source).not.toMatch(/HISTORY_PLACEHOLDER\s*=/);
+  });
+
+  it('the old placeholder string "打卡历史等 T-US005-4 接入" has been removed', () => {
+    // 防御:即便常量名变更,占位字符串也应一并清除
+    expect(source).not.toMatch(/打卡历史等 T-US005-4 接入/);
+  });
+
+  // -----------------------------------------------------------------
+  // TaskHistory 导入 + 渲染
+  // -----------------------------------------------------------------
+
+  it('imports TaskHistory from ../components/TaskHistory', () => {
+    expect(source).toMatch(
+      /import\s*\{[^}]*\bTaskHistory\b[^}]*\}\s*from\s*['"]\.\.\/components\/TaskHistory['"]/,
+    );
+  });
+
+  it('renders <TaskHistory /> in the JSX with all 4 required props', () => {
+    // 必须传 completedAt / completedBy / isMakeup / assigneeLabels 四参
+    // 缺任一参都视为接入不完整
+    expect(source).toMatch(
+      /<TaskHistory\s+[\s\S]*?completedAt=\{task\.completed_at\}[\s\S]*?completedBy=\{task\.completed_by\}[\s\S]*?isMakeup=\{task\.is_makeup\}[\s\S]*?assigneeLabels=\{assigneeLabels\}[\s\S]*?\/>/,
+    );
+  });
+
+  // -----------------------------------------------------------------
+  // assigneeLabels 派生
+  // -----------------------------------------------------------------
+
+  it('derives assigneeLabels via useMemo with family members mapping', () => {
+    // 复用 HomeScreen 同结构(family.created_by → '我',其他 member → '配偶')
+    // 防御:不允许临时函数 / 内联对象,必须 useMemo 稳定引用
+    expect(source).toMatch(
+      /assigneeLabels\s*=\s*useMemo<Record<string,\s*['"]\u6211['"]\s*\|\s*['"]\u914d\u5076['"]>>\s*\(/,
+    );
+    expect(source).toMatch(/assigneeLabels[\s\S]*?family\.created_by\s*\?\s*['"]\u6211['"]\s*:\s*['"]\u914d\u5076['"]/);
+  });
+
+  // -----------------------------------------------------------------
+  // 条件渲染契约:completed_at === null 时不渲染
+  // -----------------------------------------------------------------
+
+  it('passes task.completed_at directly (TaskHistory internally returns null when null)', () => {
+    // 设计决策:TaskHistory 自包含 'return null if completedAt === null'(T-US006-2 组件边界),
+    // 父层 TaskDetailScreen 不再做外层条件渲染 wrapper(对比之前 InfoSection.HISTORY_PLACEHOLDER)。
+    // 防御:不允许 JSX 外层再做 `task.completed_at ? <TaskHistory /> : <InfoSection ... />`
+    // 双层分支(那是历史的 v1 简化方案,不应回退)。
+    expect(source).toMatch(/<TaskHistory[\s\S]*?\/>/);
+    // 反向防御:JSX 里不应再有 `<TaskHistory>` 与 `null` 或其他 InfoSection 互斥
+    // 简化:已通过 matched once(无 ? 在 ? 中锚定)— 这里改检查完整替换形
+    expect(source).not.toMatch(/<TaskHistory[\s\S]*?<InfoSection/);
+  });
+
+  it('does NOT use the InforSection with SECTION_HISTORY_LABEL anymore (label moved into TaskHistory)', () => {
+    // SECTION_HISTORY_LABEL 常量已删除(由 TaskHistory 内部硬编码 '打卡历史')
+    expect(source).not.toMatch(/SECTION_HISTORY_LABEL/);
+    // 历史遗留 InfoSection.HISTORY_PLACEHOLDER 也应消失
+    expect(source).not.toMatch(/InfoSection[\s\S]*?HISTORY_PLACEHOLDER/);
+  });
+
+  // -----------------------------------------------------------------
+  // Clock icon import 已不再使用(TuskHistory 自渲染)
+  // -----------------------------------------------------------------
+
+  it('removes the now-unused Clock phosphor import (TaskHistory owns its icon)', () => {
+    // 升级前:`Clock` 在 phosphor-react-native import 里 + JSX 用作 section icon
+    // 升级后:TaskHistory 自渲染 Clock icon,父层不再使用
+    // 防御:不再有 `import { ..., Clock, ... } from 'phosphor-react-native'`
+    // (允许 Clock 在 TaskHistory 内部 import 出现)
+    // 这里仅校验 TaskDetailScreen.tsx 自身不含 Clock import
+    expect(source).not.toMatch(/import\s*\{[^}]*\bClock\b[^}]*\}\s*from\s*['"]phosphor-react-native['"]/);
+  });
+
+  // -----------------------------------------------------------------
+  // 文档注释升级
+  // -----------------------------------------------------------------
+
+  it('file-level doc-comment header lists T-US006-2', () => {
+    // 文件头 T-US* 任务 ID 段必须包含 T-US006-2
+    expect(source).toMatch(/\* TaskDetailScreen[\s\S]*?T-US006-2/);
+  });
+
+  it('简化决策段含 T-US006-2 描述', () => {
+    // 简化决策(decisions)段提及 T-US006-2
+    expect(source).toMatch(/T-US006-2[\s\S]*?TaskHistory/);
   });
 });

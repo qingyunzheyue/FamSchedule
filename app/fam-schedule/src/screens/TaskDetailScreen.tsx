@@ -1,8 +1,9 @@
 /**
- * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4 + T-US014-2 + T-US006
+ * TaskDetailScreen — 任务详情页 — T-US003-1 + T-US003-1 review fix + T-US003-2 + T-US005-1 + T-US005-2 + T-US005-4 + T-US014-2 + T-US006 + T-US006-2
  *
  * 职责(US-002 故事 2/3 — 端到端查看单个任务 + US-005 故事 2/4 — 配偶先完成
- *       + US-006 故事 1/2 — 漏打卡补救 + US-014 故事 2/2 — 详情页过期 banner):
+ *       + US-006 故事 1/2 — 漏打卡补救 + US-006 故事 2/2 — 补卡历史显示
+ *       + US-014 故事 2/2 — 详情页过期 banner):
  *   1. 从 URL `?id=<taskId>` 读 taskId
  *   2. 从 useTasks() 找该 task(找不到 → "任务不存在" + 自动 back)
  *   3. 渲染 task-detail-v1.0.md §3.1 布局的**简化版**:
@@ -12,7 +13,7 @@
  *      - 备注(如有)
  *      - 指派人
  *      - **省略**:共同执行人 / 共享设置 / 周期(留 T-US009 / T-US010 / T-US004-1)
- *      - 打卡历史(占位 — 留 T-US005-4)
+ *      - **T-US006-2 新增** 打卡历史:TaskHistory 组件(替换原 HISTORY_PLACEHOLDER 占位)
  *   4. ⋮ 菜单(任务 brief §A / §C.2 + T-US003-2):
  *      - 所有人可见:`复制为新任务` → Alert "即将推出"(留后续)
  *      - 创建者可见:`编辑` → router.push('/(main)/(home)/task-edit?id=...')
@@ -26,6 +27,8 @@
  *   7. **T-US006 新增**:handleMakeUp → CheckInService.checkin(taskId, isMakeup=true) +
  *      3 status 反馈(补卡成功 / 配偶已先一步完成 / 补卡失败)— 通过 OverdueBanner onMakeUp
  *      触发(详情页顶部 banner 上的"补卡"按钮)
+ *   8. **T-US006-2 新增**:assigneeLabels 派生(user.id → '我' / '配偶'),透传给 TaskHistory 用于
+ *      把 completed_by 翻译成 UI 标签;task.completed_at === null 时 TaskHistory 内部 return null
  *
  * 设计依据:
  *   - 任务 detail-v1.0.md §3.1 / §3.2 / §3.4 / §6 文案 / §7 a11y
@@ -54,6 +57,9 @@
  *                      - checked_in        → Alert "补卡成功"
  *                      - spouse_completed  → Alert "配偶已先一步完成" (复用 mapCheckInResultToToast)
  *                      - failed            → Alert "补卡失败" + mapCheckInFailureReason
+ *   - ✅ **T-US006-2**:打卡历史显示 — TaskHistory 组件替换 HISTORY_PLACEHOLDER 占位;
+ *                    assigneeLabels useMemo 派生 + 透传给 TaskHistory;
+ *                    task.completed_at === null 时 TaskHistory 内部 return null(不渲染)
  *
  * T-US003-1 review fix:
  *   - Major #3-5:`isOwner` 计算的 currentUserId 来源从 `useFamilyValue()?.family.created_by`
@@ -120,7 +126,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Text, XStack, YStack } from 'tamagui';
 import {
-  Clock,
   DotsThreeVertical,
   Note,
   User as UserIcon,
@@ -142,6 +147,7 @@ import { CheckInService } from '../services/CheckInService';
 import { showConfirmDialog } from '../components/ConfirmDialog';
 import { CheckInButton } from '../components/CheckInButton';
 import { OverdueBanner } from '../components/OverdueBanner';
+import { TaskHistory } from '../components/TaskHistory';
 import type { Task } from '../lib/LocalStore';
 
 // =====================================================================
@@ -171,8 +177,6 @@ const TEMPLATE_DELETE_BLOCKED_MESSAGE = '请先在家庭 Tab 解除模板关联'
 
 const SECTION_DESCRIPTION_LABEL = '备注';
 const SECTION_ASSIGNEE_LABEL = '指派人';
-const SECTION_HISTORY_LABEL = '打卡历史';
-const HISTORY_PLACEHOLDER = '打卡历史等 T-US005-4 接入';
 
 /** T-US005-1:打卡失败 Alert 标题 */
 const CHECKIN_FAILED_TITLE = '打卡失败';
@@ -266,6 +270,18 @@ export function TaskDetailScreen(): React.JSX.Element {
   const isOwner = !!task && task.created_by === currentUserId;
   // isCompleted / isCancelled 派生移至 TaskHero 子组件(任务 brief §C.4)+
   // CheckInButton 自身 getCheckInState 派生独立的 4 状态视觉
+
+  // T-US006-2:assigneeLabels — user.id → '我' / '配偶'(复用 HomeScreen 同结构)
+  // 透传给 TaskHistory 用于把 completed_by 翻译成 UI 标签;未知 user id 兜底由
+  // TaskHistory.formatHistoryEntry 内部处理('家庭成员')。
+  const assigneeLabels = useMemo<Record<string, '我' | '配偶'>>(() => {
+    if (!familyValue) return {};
+    const labels: Record<string, '我' | '配偶'> = {};
+    for (const m of familyValue.members) {
+      labels[m.user_id] = m.user_id === familyValue.family.created_by ? '我' : '配偶';
+    }
+    return labels;
+  }, [familyValue]);
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -575,13 +591,12 @@ export function TaskDetailScreen(): React.JSX.Element {
             testID="section-assignee"
           />
 
-          {/* 打卡历史(留 T-US005 — 占位) */}
-          <InfoSection
-            icon={<Clock size={20} color={COLOR_TEXT_SECONDARY} weight="regular" />}
-            label={SECTION_HISTORY_LABEL}
-            value={HISTORY_PLACEHOLDER}
-            muted
-            testID="section-history"
+          {/* 打卡历史(T-US006-2 — 真实显示当前 task 的打卡记录)*/}
+          <TaskHistory
+            completedAt={task.completed_at}
+            completedBy={task.completed_by}
+            isMakeup={task.is_makeup}
+            assigneeLabels={assigneeLabels}
           />
 
           {/* 主操作区(T-US005-1:CheckInButton 替换原 placeholder)— 4 状态视觉由 CheckInButton 派生 */}
